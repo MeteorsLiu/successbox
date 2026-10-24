@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"golang.org/x/sys/unix"
 	"os"
 	"os/exec"
@@ -148,7 +149,10 @@ func run() (err error) {
 		return err
 	}
 	ctx := context.Background()
-	box, err := sandbox.New(ctx, sandbox.WithRootfs("/", false), sandbox.WithRuntimeDir(filepath.Join(dir, "runtime")), sandbox.WithStateDir(filepath.Join(dir, "sandbox-state")), sandbox.WithDebug(filepath.Join(dir, "debug")+"/"), sandbox.WithoutHostBinaryMounts())
+	// The root fixture may live below another user's private home on CI.
+	// Match the service's root traversal permission without chmod of host paths.
+	caps := &specs.LinuxCapabilities{Bounding: []string{"CAP_DAC_OVERRIDE"}, Permitted: []string{"CAP_DAC_OVERRIDE"}, Effective: []string{"CAP_DAC_OVERRIDE"}}
+	box, err := sandbox.New(ctx, sandbox.WithCapabilities(caps), sandbox.WithRootfs("/", false), sandbox.WithRuntimeDir(filepath.Join(dir, "runtime")), sandbox.WithStateDir(filepath.Join(dir, "sandbox-state")), sandbox.WithDebug(filepath.Join(dir, "debug")+"/"), sandbox.WithoutHostBinaryMounts())
 	if err != nil {
 		return err
 	}
