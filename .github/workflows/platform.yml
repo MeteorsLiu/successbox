@@ -28,11 +28,22 @@ jobs:
           go-version-file: experimental/platform/go.mod
           cache-dependency-path: experimental/platform/go.sum
       - name: Unit tests
-        run: go test -race ./internal/observe
+        run: go test -race ./internal/observe ./cmd/worktrees
       - name: Build runtime and integration probes
         env:
           CGO_ENABLED: "0"
         run: |
           go build ./cmd/...
           go build -tags successbox_mmap_probe ./cmd/...
-          go build ./testdata/sandboxexec ./testdata/memory ./testdata/memory-guest
+          go build ./testdata/sandboxexec ./testdata/memory ./testdata/memory-guest ./testdata/worktrees
+      - name: Run lazy worktrees on the native Linux host
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          binary_dir="$RUNNER_TEMP/worktrees-bin"
+          mkdir -p "$binary_dir/gvisor-bin"
+          go build -o "$binary_dir/runsc" ./cmd/runsc
+          go build -o "$binary_dir/gvisor-bin/gvisor_sentry" ./cmd/sentry
+          go build -o "$binary_dir/worktrees" ./cmd/worktrees
+          go build -o "$binary_dir/worktree-probe" ./testdata/worktrees
+          sudo "$binary_dir/worktree-probe" "$RUNNER_TEMP/worktree-probe" "$binary_dir/worktrees" "$binary_dir/runsc"

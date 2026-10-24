@@ -18,6 +18,8 @@ import (
 	"gvisor.dev/gvisor/pkg/sentry/kernel"
 	"gvisor.dev/gvisor/pkg/sentry/platform"
 	_ "gvisor.dev/gvisor/pkg/sentry/platform/systrap"
+	"gvisor.dev/gvisor/pkg/sentry/vfs"
+	"gvisor.dev/gvisor/pkg/unet"
 )
 
 // Set only during package initialization. The default observer does not allocate
@@ -40,33 +42,48 @@ func (c *constructor) New(opts platform.Options) (platform.Platform, error) {
 	if inspectSyscall != nil {
 		installSyscallMemory()
 	}
+	var worktrees *worktreeMounts
+	if opts.DeviceFile != nil {
+		socket, err := unet.NewSocket(opts.DeviceFile.Release())
+		if err != nil {
+			return nil, err
+		}
+		worktrees = &worktreeMounts{socket: socket, mounted: make(map[*vfs.MountNamespace]map[string]bool)}
+		opts.DeviceFile = nil
+	}
 	base, err := c.Constructor.New(opts)
 	if err != nil {
+		if worktrees != nil {
+			worktrees.socket.Close()
+		}
 		return nil, err
 	}
 	log.Infof("successbox-platform: observer enabled in Sentry")
-	return &observedPlatform{Platform: base}, nil
+	return &observedPlatform{Platform: base, worktrees: worktrees}, nil
 }
 
 type observedPlatform struct {
 	platform.Platform
+	worktrees   *worktreeMounts
 	nextContext atomic.Uint64
 }
 
 func (p *observedPlatform) NewContext(ctx context.Context) platform.Context {
 	return &observedContext{
-		Context: p.Platform.NewContext(ctx),
-		id:      p.nextContext.Add(1),
-		task:    kernel.TaskFromContext(ctx),
+		Context:   p.Platform.NewContext(ctx),
+		id:        p.nextContext.Add(1),
+		task:      kernel.TaskFromContext(ctx),
+		worktrees: p.worktrees,
 	}
 }
 
 type observedContext struct {
 	platform.Context
-	id       uint64
-	syscalls uint64
-	unames   uint64
-	task     *kernel.Task
+	id        uint64
+	syscalls  uint64
+	unames    uint64
+	task      *kernel.Task
+	worktrees *worktreeMounts
 }
 
 func (c *observedContext) Switch(ctx context.Context, mm platform.MemoryManager, ac *arch.Context64, cpu int32) (*linux.SignalInfo, hostarch.AccessType, error) {
@@ -75,6 +92,12 @@ func (c *observedContext) Switch(ctx context.Context, mm platform.MemoryManager,
 	// and preemption also return through Switch and must bypass the observer.
 	if err == nil {
 		c.syscalls++
+		if c.worktrees != nil {
+			ac.SyscallSaveOrig()
+			if err := c.worktrees.inspect(c.task, ac, c.syscalls == 1); err != nil {
+				return nil, hostarch.NoAccess, err
+			}
+		}
 		if ac.SyscallNo() == uintptr(unix.SYS_UNAME) {
 			c.unames++
 			log.Debugf("successbox-platform: context=%d observed uname", c.id)
