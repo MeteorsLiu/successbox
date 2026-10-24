@@ -1,0 +1,82 @@
+syntax = "proto3";
+
+package successbox.sandbox.v1;
+option go_package = "github.com/MeteorsLiu/successbox/api/sandbox/v1;sandboxv1";
+
+service SandboxService {
+  rpc Create(CreateRequest) returns (SandboxRef);
+  rpc Exec(stream ExecInput) returns (stream ExecOutput);
+  rpc Display(stream DisplayInput) returns (stream DisplayOutput);
+  rpc Close(SandboxRef) returns (Empty);
+}
+
+message Empty {}
+message SandboxRef { string id = 1; }
+
+message CreateRequest {
+  string rootfs = 1;
+  repeated Mount mounts = 2;
+  repeated string env = 3;
+  string working_dir = 4;
+  User user = 5;
+  string hostname = 6;
+  // Optional sandbox init. Defaults to /bin/sleep infinity.
+  repeated string init_argv = 7;
+  // Prepare the backend's graphical display. Create never opens a viewer.
+  bool desktop = 8;
+  uint32 cpus = 9;
+  uint64 memory_bytes = 10;
+}
+
+message User { uint32 uid = 1; uint32 gid = 2; }
+message Mount {
+  string source = 1;
+  string destination = 2;
+  bool read_only = 3;
+}
+
+message ExecStart {
+  string sandbox_id = 1;
+  repeated string argv = 2;
+  TerminalSize terminal = 3;
+}
+message TerminalSize { uint32 columns = 1; uint32 rows = 2; }
+message ExecInput {
+  oneof payload {
+    ExecStart start = 1;
+    bytes stdin = 2;
+    Empty stdin_closed = 3;
+    int32 signal = 4;
+    TerminalSize resize = 5;
+  }
+}
+message ExecOutput {
+  oneof payload {
+    bytes stdout = 1;
+    bytes stderr = 2;
+    ExecResult result = 3;
+  }
+}
+message ExecResult { int32 exit_code = 1; }
+
+// Each Display call is one independent RDP connection to the sandbox.
+// Closing this stream disconnects the viewer; it does not close the sandbox.
+message DisplayInput {
+  oneof payload {
+    SandboxRef connect = 1;
+    bytes data = 2;
+  }
+}
+enum DisplayProtocol {
+  DISPLAY_PROTOCOL_UNSPECIFIED = 0;
+  DISPLAY_PROTOCOL_RDP = 2;
+}
+message DisplayReady {
+  DisplayProtocol protocol = 1;
+}
+message DisplayOutput {
+  oneof payload {
+    DisplayReady ready = 1;
+    bytes data = 2;
+  }
+}
