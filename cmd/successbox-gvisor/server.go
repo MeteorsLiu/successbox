@@ -27,23 +27,25 @@ import (
 
 type server struct {
 	pb.UnimplementedSandboxServiceServer
-	binary  string
-	root    string
-	rdpPort uint16
-	mu      sync.Mutex
-	boxes   map[string]*sandbox
+	binary         string
+	worktreeHelper string
+	root           string
+	rdpPort        uint16
+	mu             sync.Mutex
+	boxes          map[string]*sandbox
 }
 
 type sandbox struct {
-	id, dir  string
-	options  *pb.CreateRequest
-	ctx      context.Context
-	cancel   context.CancelFunc
-	active   sync.WaitGroup
-	closing  bool
-	failed   bool
-	closed   chan struct{}
-	closeErr error
+	id, dir   string
+	options   *pb.CreateRequest
+	ctx       context.Context
+	cancel    context.CancelFunc
+	active    sync.WaitGroup
+	closing   bool
+	failed    bool
+	closed    chan struct{}
+	closeErr  error
+	worktrees *exec.Cmd
 }
 
 func (s *server) command(ctx context.Context, args ...string) *exec.Cmd {
@@ -102,9 +104,14 @@ func (s *server) Create(ctx context.Context, request *pb.CreateRequest) (*pb.San
 		return nil, status.Error(codes.Internal, "cannot create sandbox state")
 	}
 	created := false
+	var worktrees *exec.Cmd
 	defer func() {
 		if !created {
 			_ = s.command(context.Background(), "delete", "--force", id).Run()
+			if worktrees != nil {
+				worktrees.Process.Signal(syscall.SIGTERM)
+				_ = worktrees.Wait()
+			}
 			_ = os.RemoveAll(dir)
 		}
 	}()
@@ -113,6 +120,11 @@ func (s *server) Create(ctx context.Context, request *pb.CreateRequest) (*pb.San
 		return nil, status.Error(codes.Internal, "cannot create overlay storage")
 	}
 	spec := makeSpec(request)
+	if s.worktreeHelper != "" {
+		if err := hideWorktreeState(spec, s.root); err != nil {
+			return nil, status.Errorf(codes.Internal, "hide runtime state: %v", err)
+		}
+	}
 	data, err := json.MarshalIndent(spec, "", "  ")
 	if err != nil {
 		return nil, status.Error(codes.Internal, "cannot encode OCI spec")
@@ -121,6 +133,9 @@ func (s *server) Create(ctx context.Context, request *pb.CreateRequest) (*pb.San
 		return nil, status.Error(codes.Internal, "cannot write OCI spec")
 	}
 	args := []string{"--network=none", "--overlay2=all:dir=" + filestore}
+	if s.worktreeHelper != "" {
+		args = append(args, "--platform=successbox", "--platform_device_path="+filepath.Join(dir, "worktrees.sock"))
+	}
 	if os.Geteuid() != 0 {
 		args = append(args, "--rootless=true", "--ignore-cgroups")
 	}
@@ -133,13 +148,19 @@ func (s *server) Create(ctx context.Context, request *pb.CreateRequest) (*pb.San
 		return nil, status.Error(codes.Internal, "cannot create runtime log")
 	}
 	defer logFile.Close()
+	if s.worktreeHelper != "" {
+		worktrees, err = s.startWorktrees(ctx, id, dir, logFile)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "worktree startup failed: %v", err)
+		}
+	}
 	cmd := s.command(ctx, args...)
 	cmd.Stdout, cmd.Stderr = logFile, logFile
 	if err := cmd.Run(); err != nil {
 		return nil, status.Errorf(codes.Internal, "runsc startup failed: %v", err)
 	}
 	boxCtx, cancel := context.WithCancel(context.Background())
-	b := &sandbox{id: id, dir: dir, options: proto.Clone(request).(*pb.CreateRequest), ctx: boxCtx, cancel: cancel}
+	b := &sandbox{worktrees: worktrees, id: id, dir: dir, options: proto.Clone(request).(*pb.CreateRequest), ctx: boxCtx, cancel: cancel}
 	s.mu.Lock()
 	s.boxes[id] = b
 	s.mu.Unlock()
@@ -629,6 +650,10 @@ func (s *server) Close(ctx context.Context, ref *pb.SandboxRef) (*pb.Empty, erro
 		b.cancel()
 		b.active.Wait()
 		err := s.command(context.Background(), "delete", "--force", b.id).Run()
+		if err == nil && b.worktrees != nil {
+			err = b.worktrees.Process.Signal(syscall.SIGTERM)
+			err = errors.Join(err, b.worktrees.Wait())
+		}
 		if err == nil {
 			err = os.RemoveAll(b.dir)
 		}

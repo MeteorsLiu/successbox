@@ -20,6 +20,7 @@ func main() {
 	socket := flag.String("socket", "", "path to the private Unix socket")
 	state := flag.String("state", "", "directory for this service's sandbox state")
 	binary := flag.String("runsc", "runsc", "runsc executable")
+	worktrees := flag.String("worktrees", "", "experimental worktrees helper executable")
 	rdpPort := flag.Uint("rdp-port", 3389, "RDP port inside desktop sandboxes")
 	flag.Parse()
 	if runtime.GOOS != "linux" {
@@ -50,7 +51,21 @@ func main() {
 	if err := os.Chmod(*socket, 0600); err != nil {
 		log.Fatal(err)
 	}
-	backend := &server{binary: path, root: root, rdpPort: uint16(*rdpPort), boxes: make(map[string]*sandbox)}
+	if *worktrees != "" {
+		if os.Geteuid() != 0 {
+			log.Fatal("experimental worktrees currently require a rootful backend")
+		}
+		*worktrees, err = exec.LookPath(*worktrees)
+		if err != nil {
+			log.Fatal(err)
+		}
+		// Private per-sandbox directories remain 0700; workers running as the
+		// guest UID only need traversal to their own retained result directory.
+		if err := os.Chmod(root, 0711); err != nil {
+			log.Fatal(err)
+		}
+	}
+	backend := &server{worktreeHelper: *worktrees, binary: path, root: root, rdpPort: uint16(*rdpPort), boxes: make(map[string]*sandbox)}
 	rpc := grpc.NewServer()
 	pb.RegisterSandboxServiceServer(rpc, backend)
 	signals := make(chan os.Signal, 1)
