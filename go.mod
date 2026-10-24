@@ -4,6 +4,7 @@ go 1.27.1
 
 require (
 	github.com/containerd/console v1.0.4
+	github.com/opencontainers/runtime-spec v1.2.1
 	google.golang.org/grpc v1.80.0
 	google.golang.org/protobuf v1.36.11
 )

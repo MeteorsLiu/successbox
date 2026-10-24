@@ -1,17 +1,32 @@
 # Successbox prototype
 
-A local gRPC protocol and command-line client for creating sandboxes, executing commands, and connecting to an RDP desktop. The frontend receives a sandbox ID; it does not need a guest IP address. Runtime backends are added in the following stages.
+A local gRPC service for creating sandboxes, executing commands, and connecting to an RDP desktop. The frontend receives a sandbox ID; it does not need a guest IP address. The backend never opens a viewer window.
+
+The Linux backend uses gVisor `runsc` directly. Guest `socat` bridges the RDP port through `runsc exec` IO, and the `Display` RPC carries the resulting RDP bytes. A headless RDP desktop must already be installed and started inside the supplied guest filesystem.
 
 ## Build
 
 The Go module uses Go 1.27.1.
 
 ```sh
-make go     # Build the sbx client
-make check  # Run Go tests with the race detector
+make go     # Native sbx client; Linux arm64 and amd64 gVisor backends
+make check  # Go tests with the race detector
 ```
 
 Go protobuf bindings are checked in. `make generate` requires `protoc`, `protoc-gen-go`, and `protoc-gen-go-grpc` in `.tools/bin` or `PATH`.
+
+## Start the service
+
+On Linux, install `runsc` and its accompanying release files, then run the matching backend directly:
+
+```sh
+./bin/successbox-gvisor-linux-amd64 \
+  --socket /absolute/path/successbox/control.sock \
+  --state /absolute/path/successbox/state \
+  --runsc /absolute/path/to/runsc
+```
+
+The service restricts its control socket to its owner. The prototype has no external guest network: RDP is reached through the runtime transport, not an exposed host port. `--rdp-port` selects the guest port and defaults to 3389.
 
 ## Create, execute, display, close
 
@@ -32,7 +47,7 @@ Create a JSON file using the protobuf field names:
 ./bin/sbx --socket /absolute/path/successbox/control.sock close SANDBOX_ID
 ```
 
-The default init is `/bin/sleep infinity`. To run a desktop, set `desktop` to `true` and supply `initArgv` for the image's startup command. That command must start an RDP server and its headless display/session components. Merely setting `desktop` does not install them. Both desktop backends need `/usr/bin/socat` in the guest image. Configure RDP authentication in the guest; the control protocol does not transmit a desktop password in its metadata.
+The default init is `/bin/sleep infinity`. To run a desktop, set `desktop` to `true` and supply `initArgv` for the image's startup command. That command must start an RDP server and its headless display/session components. Merely setting `desktop` does not install them. The desktop backend needs `/usr/bin/socat` in the guest image. Configure RDP authentication in the guest; the control protocol does not transmit a desktop password in its metadata.
 
 A frontend implements an RDP client over `Display`. For testing with an existing RDP client, the CLI provides a loopback-only byte proxy:
 
@@ -57,8 +72,24 @@ Display data is the RDP wire protocol, not decoded pixel frames. Keyboard and po
 
 Closing an Exec request stream ends stdin. For an interactive PTY, use terminal control characters rather than `stdin_closed`. An RPC disconnect does not terminate the command: subsequent output is drained and discarded. Reattaching to that command's terminal is not implemented. `Close` ends the sandbox's processes; closing an absent ID succeeds. Lifecycle state is currently held in the daemon, with no restart recovery.
 
+## Filesystems and resources
+
+Rootfs changes are temporary. gVisor uses its overlay filestore; closing the sandbox removes its temporary state after the runtime shuts down. Read-only mounts remain read-only, and writable mounts use an overlay without writing changes back to the host source.
+
+Resource limits remain unset unless requested. Explicit limits require a privileged backend with working cgroups.
+
 ## Continuous integration
 
-GitHub Actions runs `go test -race ./...` and `go build ./...` on Linux amd64 (`ubuntu-latest`), Linux arm64 (`ubuntu-24.04-arm`), and macOS arm64 (`macos-26`) for pull requests and pushes to `main`. These jobs validate the protocol and client; they do not boot a sandbox or a graphical desktop.
+GitHub Actions runs `go test -race ./...` and `go build ./...` on Linux amd64 (`ubuntu-latest`), Linux arm64 (`ubuntu-24.04-arm`), and macOS arm64 (`macos-26`) for pull requests and pushes to `main`. The macOS job checks the shared client and transport tests; the gVisor service itself runs on Linux.
 
-The client tests check binary display forwarding and rejection of missing, unknown, or repeated protocol metadata.
+The Go tests exercise binary display forwarding, half-close, cancellation before and after guest PID publication, relay startup failure, invalid stream metadata, and sandbox closure during Display. Backend tests use a controlled runsc stand-in; CI does not boot a sandbox or a graphical desktop.
+
+## Runtime verification
+
+The Linux backends have been cross-compiled for arm64 and amd64. With the test cgroup hierarchy prepared, arm64 runsc passed Create, environment propagation, rootfs write isolation, binary stdin/stdout, separate stderr and exit status, and Close/cleanup inside an Apple-managed Linux VM, without Docker wrapping runsc. The cgroup layout was restored afterward. amd64 currently has build coverage only.
+
+The arm64 backend also passed TTY size, resize, input, merged stderr, and SIGINT/exit checks. An xrdp guest passed certificate-verified TLS negotiation, reconnect, graphical login, an xterm framebuffer capture at 1024×768, and RDP mouse/keyboard input. Reading a file through Exec independently confirmed the text entered over RDP.
+
+The minimal test image reports missing Openbox menu/PyXDG autostart components. These checks launch the terminal explicitly through Exec; desktop menus and autostart are not covered.
+
+This prototype covers sandbox control and RDP transport. It does not yet integrate the frontend, MCP gateway, or LLM gateway.

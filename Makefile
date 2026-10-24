@@ -6,6 +6,8 @@ generate:
 go:
 	mkdir -p bin
 	go build -o bin/sbx ./cmd/sbx
+	GOOS=linux GOARCH=arm64 go build -o bin/successbox-gvisor-linux-arm64 ./cmd/successbox-gvisor
+	GOOS=linux GOARCH=amd64 go build -o bin/successbox-gvisor-linux-amd64 ./cmd/successbox-gvisor
 
 check:
 	go test -race ./...
