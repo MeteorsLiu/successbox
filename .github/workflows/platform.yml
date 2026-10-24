@@ -58,4 +58,5 @@ jobs:
           chmod +x "$binary_dir/runsc-test"
           fixture_parent=$(mktemp -d /var/tmp/successbox-worktree-service.XXXXXX)
           chmod 711 "$fixture_parent"
-          sudo ../../testdata/gvisor-worktrees.sh "$binary_dir/sbx" "$binary_dir/successbox-gvisor" "$binary_dir/runsc-test" "$binary_dir/worktrees" "$fixture_parent/run"
+          install -m 755 "$binary_dir/worktrees" "$fixture_parent/worktrees"
+          sudo ../../testdata/gvisor-worktrees.sh "$binary_dir/sbx" "$binary_dir/successbox-gvisor" "$binary_dir/runsc-test" "$fixture_parent/worktrees" "$fixture_parent/run"
