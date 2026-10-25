@@ -76,3 +76,15 @@ The native fixture checks twelve JSON/streaming cases covering Messages, Respons
 The host control protocol is defined in [gateway.proto](../api/gateway/v1/gateway.proto). One bidirectional `GatewaySession` RPC carries correlated requests, replies and events for secret CRUD, missing-value input and MCP installation approval. Authentication determines the caller identity; messages do not declare a role. Installation requests contain no MCP ID or secret value.
 
 This change adds Go bindings and the Swift `GatewayProtocol` generation target. The service implementation follows in the next PR.
+
+## Installation and credential service
+
+Enable the host control service with `--control-listen 127.0.0.1:9090`, `--control-db /private/path/gateway.db`, and distinct `--control-frontend-token`, `--control-gateway-token`, and `--control-agent-token` values. These credentials stay outside the sandbox. Streams authenticate through `x-successbox-client` and `authorization` metadata, open a sandbox scope, and correlate requests and responses by ID.
+
+One SQLite table stores `(sandbox_id, mcp_id, field_name)` mappings. Lists, mutation responses and events expose metadata; explicit frontend Get returns a value. Missing-value requests share one in-memory prompt and resume after a committed frontend write.
+
+The adapter serves the existing `/mcp` endpoint and keeps native Bifrost on a private loopback port. `request_mcp_install` submits a deduplicated approval request. Approval registers through Bifrost, publishes its real client ID for credential input, applies the caller's virtual-key grants and sends a directory-change notification. Declared top-level argument placeholders are resolved before forwarding. Native HTTP/stdio connection configuration stays with Bifrost.
+
+The current host binding uses active Bifrost virtual-key IDs as sandbox scopes. This service does not yet wire those scopes to VM creation or add an Agent launcher. A directory notification is not proof that a particular client has loaded new tools.
+
+Run `SUCCESSBOX_TEST_BIFROST=/absolute/path/to/bifrost-http go test -race ./cmd/sbx -run TestGatewaySession` for the native installation workflow. Cancellation deadlines and live-agent tests are separate changes.

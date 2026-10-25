@@ -54,3 +54,5 @@ jobs:
         run: python3 testdata/gateways/run.py "$RUNNER_TEMP/sbx" "$RUNNER_TEMP/gateways/cli-proxy-api" "$RUNNER_TEMP/gateways/bifrost-http" "$SUCCESSBOX_PLUGIN"
       - name: Verify token account binding
         run: python3 testdata/gateways/routing.py "$RUNNER_TEMP/gateways/cli-proxy-api" "$SUCCESSBOX_PLUGIN"
+      - name: Verify installation, credentials and isolation with native Bifrost
+        run: SUCCESSBOX_TEST_BIFROST="$RUNNER_TEMP/gateways/bifrost-http" go test -race ./cmd/sbx -run TestGatewaySession -count=1 -v
