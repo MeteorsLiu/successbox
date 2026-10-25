@@ -30,6 +30,8 @@ function Row({
 const status = (s: ServiceState) =>
   s === 'ok' ? (
     <span className="pill ok">正常</span>
+  ) : s === 'unknown' ? (
+    <span className="pill">尚未接入状态检查</span>
   ) : (
     <span className="pill err">未运行</span>
   );
@@ -77,59 +79,70 @@ export function SettingsPage({
   return (
     <>
       <div className="h2">通用</div>
-      <div className="card" style={{ paddingTop: 2, paddingBottom: 2 }}>
-        <Row
-          title="命令行集成"
-          description={
-            <>
-              终端里的 <code>claude</code> 和 <code>codex</code> 通过 Successbox
-              启动。关闭后恢复为原来的命令。
-            </>
-          }
-        >
-          <Switch
-            checked={settings.commandLine}
-            onChange={(v) => toast.run(api.updateSettings({ commandLine: v }))}
+      {!state.simulated && (
+        <div className="note">
+          此阶段仅接入网关凭据与安装审批，以下运行设置暂不可用。
+        </div>
+      )}
+      <fieldset
+        disabled={!state.simulated}
+        style={{ border: 0, padding: 0, margin: 0 }}
+      >
+        <div className="card" style={{ paddingTop: 2, paddingBottom: 2 }}>
+          <Row
             title="命令行集成"
-          />
-        </Row>
-        <Row
-          title="启动时显示一行提示"
-          description="受保护的 Agent 启动和结束时，在终端里显示一行说明和改动保存位置"
-        >
-          <Switch
-            checked={settings.terminalHints}
-            onChange={(v) =>
-              toast.run(api.updateSettings({ terminalHints: v }))
+            description={
+              <>
+                终端里的 <code>claude</code> 和 <code>codex</code> 通过
+                Successbox 启动。关闭后恢复为原来的命令。
+              </>
             }
-            title="启动时显示一行提示"
-          />
-        </Row>
-        <Row
-          title="副本保存位置"
-          description={
-            <>
-              <code>{settings.copyDir}</code>（非 Git 目录的改动）
-            </>
-          }
-        >
-          <button
-            className="btn sm"
-            onClick={() => toast.show('更改位置需要后端支持，暂未实现')}
           >
-            更改
-          </button>
-        </Row>
-        <Row
-          title="导入现有配置"
-          description="从 Claude Code 和 Codex 的配置文件中导入账号和 MCP。原文件不会被修改。"
-        >
-          <button className="btn sm" onClick={onReimport}>
-            重新导入
-          </button>
-        </Row>
-      </div>
-
+            <Switch
+              checked={settings.commandLine}
+              onChange={(v) =>
+                toast.run(api.updateSettings({ commandLine: v }))
+              }
+              title="命令行集成"
+            />
+          </Row>
+          <Row
+            title="启动时显示一行提示"
+            description="受保护的 Agent 启动和结束时，在终端里显示一行说明和改动保存位置"
+          >
+            <Switch
+              checked={settings.terminalHints}
+              onChange={(v) =>
+                toast.run(api.updateSettings({ terminalHints: v }))
+              }
+              title="启动时显示一行提示"
+            />
+          </Row>
+          <Row
+            title="副本保存位置"
+            description={
+              <>
+                <code>{settings.copyDir}</code>（非 Git 目录的改动）
+              </>
+            }
+          >
+            <button
+              className="btn sm"
+              onClick={() => toast.show('更改位置需要后端支持，暂未实现')}
+            >
+              更改
+            </button>
+          </Row>
+          <Row
+            title="导入现有配置"
+            description="从 Claude Code 和 Codex 的配置文件中导入账号和 MCP。原文件不会被修改。"
+          >
+            <button className="btn sm" onClick={onReimport}>
+              重新导入
+            </button>
+          </Row>
+        </div>
+      </fieldset>
       <div className="h2">服务状态</div>
       <div className="card" style={{ paddingTop: 2, paddingBottom: 2 }}>
         <Row title="沙箱服务" description="运行受保护的 Agent">

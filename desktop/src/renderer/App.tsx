@@ -13,7 +13,7 @@ import iconUrl from '../../assets/icon.png';
 
 export function App() {
   const state = useAppState();
-  const [page, setPage] = useState<Page>('agent');
+  const [page, setPage] = useState<Page>('mcp');
   const [agent, setAgent] = useState<AgentId>('claude');
   const [welcome, setWelcome] = useState(false);
 
@@ -82,15 +82,31 @@ export function App() {
       </header>
       <main className="scroll">
         <div className="inner">
-          {page === 'agent' && (
-            <AgentPage
-              state={state}
-              agent={agent}
-              onOpenSettings={() => setPage('settings')}
-            />
+          {state.gatewayControl && (
+            <div className="note" role="status">
+              {state.gatewayControl.message}
+            </div>
           )}
+          {page === 'agent' &&
+            (state.simulated ? (
+              <AgentPage
+                state={state}
+                agent={agent}
+                onOpenSettings={() => setPage('settings')}
+              />
+            ) : (
+              <div className="card muted">
+                Agent 启动、账号和沙箱保护开关尚未接入。当前可使用 MCP
+                密钥管理和可信审批窗口。
+              </div>
+            ))}
           {page === 'mcp' && <McpPage state={state} />}
-          {page === 'changes' && <ChangesPage state={state} />}
+          {page === 'changes' &&
+            (state.simulated ? (
+              <ChangesPage state={state} />
+            ) : (
+              <div className="card muted">运行记录和改动结果尚未接入。</div>
+            ))}
           {page === 'settings' && (
             <SettingsPage state={state} onReimport={() => setWelcome(true)} />
           )}

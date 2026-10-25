@@ -40,6 +40,7 @@ export function createTray(backend: Backend, actions: TrayActions) {
         label: '沙箱保护',
         type: 'checkbox',
         checked: protection,
+        enabled: backend.snapshot().simulated,
         click: () => run(backend.setProtection(agent, !protection)),
       },
       { type: 'separator' },

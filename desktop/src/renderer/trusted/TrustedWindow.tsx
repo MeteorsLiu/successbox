@@ -42,18 +42,24 @@ export function TrustedWindow() {
       ) : request.kind === 'secret' ? (
         <SecretForm key={request.id} request={request} state={state} />
       ) : (
-        <InstallForm key={request.id} request={request} />
+        <InstallForm
+          key={request.id}
+          request={request}
+          simulated={state.simulated}
+        />
       )}
     </div>
   );
 }
 
-function useCountdown(expiresAt: number) {
+function useCountdown(expiresAt?: number) {
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
+    if (expiresAt === undefined) return;
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
-  }, []);
+  }, [expiresAt]);
+  if (expiresAt === undefined) return null;
   const seconds = Math.max(0, Math.round((expiresAt - now) / 1000));
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
 }
@@ -71,19 +77,29 @@ function SecretForm({
   const [remember, setRemember] = useState(true);
   const remaining = useCountdown(request.expiresAt);
   const mcp =
-    state.mcps.find((m) => m.id === request.mcpId)?.name ?? request.mcpId;
+    request.mcpName ??
+    state.mcps.find((m) => m.id === request.mcpId)?.name ??
+    request.mcpId;
+  const source = request.agent
+    ? AGENT_NAMES[request.agent]
+    : `任务 ${request.sandboxId}`;
 
   const answer = (submitted: string | null) => {
     setValue('');
-    void toast.run(api.answerSecret(request.id, submitted, remember));
+    void toast.run(
+      api.answerSecret(
+        request.id,
+        submitted,
+        state.simulated ? remember : true,
+      ),
+    );
   };
 
   return (
     <>
       <div className="tw-body">
         <h3>
-          {AGENT_NAMES[request.agent]} 需要 {mcp} 的{' '}
-          <code>{request.field}</code>
+          {source} 需要 {mcp} 的 <code>{request.field}</code>
         </h3>
         <div className="muted">
           Agent 调用 MCP 工具时用占位符代替了这个值。提供之后，调用会继续执行。
@@ -91,12 +107,17 @@ function SecretForm({
         <dl className="kv">
           <dt>来自</dt>
           <dd>
-            {AGENT_NAMES[request.agent]} · {request.cwd}
+            {source}
+            {request.cwd ? ` · ${request.cwd}` : ''}
           </dd>
           <dt>MCP 服务</dt>
           <dd>{mcp}</dd>
-          <dt>工具</dt>
-          <dd>{request.tool}</dd>
+          {request.tool && (
+            <>
+              <dt>工具</dt>
+              <dd>{request.tool}</dd>
+            </>
+          )}
         </dl>
         <div className="row">
           <input
@@ -114,20 +135,28 @@ function SecretForm({
             {visible ? '隐藏' : '显示'}
           </button>
         </div>
-        <label className="check">
-          <input
-            type="checkbox"
-            checked={remember}
-            onChange={(e) => setRemember(e.target.checked)}
-          />{' '}
-          记住，以后不再询问
-        </label>
+        {state.simulated ? (
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={remember}
+              onChange={(e) => setRemember(e.target.checked)}
+            />{' '}
+            记住，以后不再询问
+          </label>
+        ) : (
+          <p className="muted small">
+            提交后会保存到此任务的 MCP 凭据中，可在敏感信息列表删除。
+          </p>
+        )}
         <div className="note" style={{ marginBottom: 12 }}>
           这个值只交给 Successbox，不会出现在 Agent 的对话、配置或日志里。
         </div>
       </div>
       <div className="m-foot">
-        <span className="muted small">{remaining} 后自动取消</span>
+        {remaining && (
+          <span className="muted small">{remaining} 后自动取消</span>
+        )}
         <span className="spacer" />
         <button className="btn" onClick={() => answer(null)}>
           拒绝
@@ -144,7 +173,13 @@ function SecretForm({
   );
 }
 
-function InstallForm({ request }: { request: InstallRequest }) {
+function InstallForm({
+  request,
+  simulated,
+}: {
+  request: InstallRequest;
+  simulated: boolean;
+}) {
   const toast = useToast();
   const [tools, setTools] = useState(
     () => new Set(request.tools.filter((t) => !t.writes).map((t) => t.name)),
@@ -164,8 +199,8 @@ function InstallForm({ request }: { request: InstallRequest }) {
   const approve = () =>
     toast.run(
       api.answerInstall(request.id, {
-        tools: [...tools],
-        agents: AGENT_IDS.filter((a) => agents[a]),
+        tools: simulated ? [...tools] : request.tools.map((tool) => tool.name),
+        agents: simulated ? AGENT_IDS.filter((a) => agents[a]) : [],
       }),
     );
 
@@ -173,31 +208,46 @@ function InstallForm({ request }: { request: InstallRequest }) {
     <>
       <div className="tw-body">
         <h3>
-          {AGENT_NAMES[request.agent]} 想添加 MCP 服务：{request.name}
+          {request.agent
+            ? AGENT_NAMES[request.agent]
+            : `任务 ${request.sandboxId}`}{' '}
+          想添加 MCP 服务：{request.name}
         </h3>
         <div className="muted">
           这是 Agent 发起的请求。请确认地址可信后再批准。
         </div>
         <dl className="kv">
-          <dt>地址</dt>
+          <dt>{request.transport === 'stdio' ? '连接描述' : '地址'}</dt>
           <dd>
             <code>{request.url}</code>
           </dd>
-          <dt>认证</dt>
-          <dd>
-            {request.auth === 'oauth'
-              ? 'OAuth · 批准后在浏览器中登录'
-              : '使用时询问'}
-          </dd>
+          {request.auth && (
+            <>
+              <dt>认证</dt>
+              <dd>
+                {request.auth === 'oauth'
+                  ? 'OAuth · 批准后在浏览器中登录'
+                  : '使用时询问'}
+              </dd>
+            </>
+          )}
+          {request.credentialFields && (
+            <>
+              <dt>需要填写</dt>
+              <dd>{request.credentialFields.join('、') || '无'}</dd>
+            </>
+          )}
         </dl>
         <div style={{ fontWeight: 600, marginTop: 4 }}>允许使用的工具</div>
         {request.tools.map((t) => (
           <label key={t.name} className="check" style={{ margin: '5px 0' }}>
-            <input
-              type="checkbox"
-              checked={tools.has(t.name)}
-              onChange={(e) => toggleTool(t.name, e.target.checked)}
-            />
+            {simulated && (
+              <input
+                type="checkbox"
+                checked={tools.has(t.name)}
+                onChange={(e) => toggleTool(t.name, e.target.checked)}
+              />
+            )}
             <span>
               <code>{t.name}</code>{' '}
               <span className="muted">{t.description}</span>
@@ -210,25 +260,36 @@ function InstallForm({ request }: { request: InstallRequest }) {
             </span>
           </label>
         ))}
-        <div style={{ fontWeight: 600, marginTop: 8 }}>给哪些 Agent 使用</div>
-        <div className="row" style={{ marginBottom: 12 }}>
-          {AGENT_IDS.map((a) => (
-            <label
-              key={a}
-              className="check"
-              style={{ margin: '4px 12px 4px 0' }}
-            >
-              <input
-                type="checkbox"
-                checked={agents[a]}
-                onChange={(e) =>
-                  setAgents({ ...agents, [a]: e.target.checked })
-                }
-              />{' '}
-              {AGENT_NAMES[a]}
-            </label>
-          ))}
-        </div>
+        {simulated ? (
+          <>
+            <div style={{ fontWeight: 600, marginTop: 8 }}>
+              给哪些 Agent 使用
+            </div>
+            <div className="row" style={{ marginBottom: 12 }}>
+              {AGENT_IDS.map((a) => (
+                <label
+                  key={a}
+                  className="check"
+                  style={{ margin: '4px 12px 4px 0' }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={agents[a]}
+                    onChange={(e) =>
+                      setAgents({ ...agents, [a]: e.target.checked })
+                    }
+                  />{' '}
+                  {AGENT_NAMES[a]}
+                </label>
+              ))}
+            </div>
+          </>
+        ) : (
+          <p className="muted small">
+            批准本任务请求的完整工具范围。需要凭据时，Successbox
+            会继续弹窗询问。
+          </p>
+        )}
       </div>
       <div className="m-foot">
         <span className="spacer" />
@@ -240,7 +301,9 @@ function InstallForm({ request }: { request: InstallRequest }) {
         </button>
         <button
           className="btn shield"
-          disabled={tools.size === 0 || !AGENT_IDS.some((a) => agents[a])}
+          disabled={
+            simulated && (tools.size === 0 || !AGENT_IDS.some((a) => agents[a]))
+          }
           onClick={approve}
         >
           批准

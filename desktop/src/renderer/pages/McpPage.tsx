@@ -34,63 +34,71 @@ export function McpPage({ state }: { state: AppState }) {
 
   return (
     <>
-      <div className="h2">
-        MCP 服务
-        <span className="spacer" />
-        <button className="btn sm primary" onClick={() => setAdding(true)}>
-          ＋ 添加 MCP
-        </button>
-      </div>
-      <div className="note" style={{ marginBottom: 12 }}>
-        在这里添加一次，再选择给哪些 Agent 使用。Agent 只连接
-        Successbox，拿不到服务的密钥。
-      </div>
-      <div className="stack">
-        {state.mcps.map((m) => (
-          <div key={m.id} className="card mcp">
-            <div className="mi">{m.name.slice(0, 1).toUpperCase()}</div>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div className="row" style={{ fontWeight: 650 }}>
-                {m.name}
-                <span className="tag">
-                  {m.transport === 'stdio' ? '本机进程' : '远程'}
-                </span>
-                {m.problem && <span className="pill err">{m.problem}</span>}
-              </div>
-              <div className="mono" style={{ marginTop: 2 }}>
-                {m.target}
-              </div>
-              <div className="muted small" style={{ marginTop: 2 }}>
-                认证：{AUTH_SHORT[m.auth]}
-              </div>
-            </div>
-            <div className="apps">
-              {AGENT_IDS.map((agent) => (
-                <label key={agent} className="app">
-                  {AGENT_NAMES[agent]}
-                  <Switch
-                    small
-                    blue
-                    checked={m.agents[agent]}
-                    onChange={(on) => setAgent(m, agent, on)}
-                    title={`给 ${AGENT_NAMES[agent]} 使用`}
-                  />
-                </label>
-              ))}
-              <button
-                className="btn sm ghost danger"
-                onClick={() => setRemoving(m)}
-              >
-                删除
-              </button>
-            </div>
+      {state.simulated ? (
+        <>
+          <div className="h2">
+            MCP 服务
+            <span className="spacer" />
+            <button className="btn sm primary" onClick={() => setAdding(true)}>
+              ＋ 添加 MCP
+            </button>
           </div>
-        ))}
-        {state.mcps.length === 0 && (
-          <div className="card muted">还没有 MCP 服务</div>
-        )}
-      </div>
-
+          <div className="note" style={{ marginBottom: 12 }}>
+            在这里添加一次，再选择给哪些 Agent 使用。Agent 只连接
+            Successbox，拿不到服务的密钥。
+          </div>
+          <div className="stack">
+            {state.mcps.map((m) => (
+              <div key={m.id} className="card mcp">
+                <div className="mi">{m.name.slice(0, 1).toUpperCase()}</div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div className="row" style={{ fontWeight: 650 }}>
+                    {m.name}
+                    <span className="tag">
+                      {m.transport === 'stdio' ? '本机进程' : '远程'}
+                    </span>
+                    {m.problem && <span className="pill err">{m.problem}</span>}
+                  </div>
+                  <div className="mono" style={{ marginTop: 2 }}>
+                    {m.target}
+                  </div>
+                  <div className="muted small" style={{ marginTop: 2 }}>
+                    认证：{AUTH_SHORT[m.auth]}
+                  </div>
+                </div>
+                <div className="apps">
+                  {AGENT_IDS.map((agent) => (
+                    <label key={agent} className="app">
+                      {AGENT_NAMES[agent]}
+                      <Switch
+                        small
+                        blue
+                        checked={m.agents[agent]}
+                        onChange={(on) => setAgent(m, agent, on)}
+                        title={`给 ${AGENT_NAMES[agent]} 使用`}
+                      />
+                    </label>
+                  ))}
+                  <button
+                    className="btn sm ghost danger"
+                    onClick={() => setRemoving(m)}
+                  >
+                    删除
+                  </button>
+                </div>
+              </div>
+            ))}
+            {state.mcps.length === 0 && (
+              <div className="card muted">还没有 MCP 服务</div>
+            )}
+          </div>
+        </>
+      ) : (
+        <div className="note">
+          当前已接入密钥管理与安装审批。MCP 服务目录的手动增删和 Agent
+          分配尚未接入。
+        </div>
+      )}
       <div className="h2">已保存的敏感信息</div>
       <div className="card">
         {state.secrets.length === 0 && (
@@ -104,12 +112,16 @@ export function McpPage({ state }: { state: AppState }) {
             className="row"
             style={{ padding: '5px 0' }}
           >
-            🔑 <b>{nameOf(s.mcpId)}</b>
+            🔑 <b>{s.mcpName ?? nameOf(s.mcpId)}</b>
+            {s.sandboxId && <span className="tag">任务 {s.sandboxId}</span>}
             <code>{s.field}</code>
             <span className="muted">保存于 {s.savedAt}</span>
             <span className="spacer" />
             <button
               className="btn sm ghost danger"
+              disabled={
+                !state.simulated && state.gatewayControl?.status !== 'connected'
+              }
               onClick={() =>
                 toast.run(
                   api.deleteSecret(s.mcpId, s.field),

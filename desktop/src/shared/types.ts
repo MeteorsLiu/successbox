@@ -37,6 +37,8 @@ export interface SavedSecret {
   mcpId: string;
   field: string;
   savedAt: string;
+  sandboxId?: string;
+  mcpName?: string;
 }
 
 /** An Agent process started through the command-line integration. */
@@ -70,22 +72,27 @@ export interface ChangeRecord {
 export interface SecretRequest {
   id: string;
   kind: 'secret';
-  agent: AgentId;
-  cwd: string;
+  agent?: AgentId;
+  cwd?: string;
   mcpId: string;
-  tool: string;
+  tool?: string;
   field: string;
-  expiresAt: number;
+  expiresAt?: number;
+  sandboxId?: string;
+  mcpName?: string;
 }
 
 export interface InstallRequest {
   id: string;
   kind: 'install';
-  agent: AgentId;
+  agent?: AgentId;
   name: string;
   url: string;
-  auth: McpAuth;
-  tools: { name: string; description: string; writes: boolean }[];
+  auth?: McpAuth;
+  tools: { name: string; description?: string; writes?: boolean }[];
+  sandboxId?: string;
+  transport?: string;
+  credentialFields?: string[];
 }
 
 export type TrustedRequest = SecretRequest | InstallRequest;
@@ -98,7 +105,7 @@ export interface Settings {
   copyDir: string;
 }
 
-export type ServiceState = 'ok' | 'down';
+export type ServiceState = 'ok' | 'down' | 'unknown';
 
 export interface AppState {
   agents: Record<AgentId, { protection: boolean; providers: Provider[] }>;
@@ -118,6 +125,10 @@ export interface AppState {
   firstRun: boolean;
   /** True while the backend is the built-in simulation. */
   simulated: boolean;
+  gatewayControl?: {
+    status: 'connected' | 'connecting' | 'disconnected';
+    message: string;
+  };
 }
 
 export interface NewProvider {

@@ -439,7 +439,7 @@ export class MockBackend implements Backend {
       name: request.name,
       transport: 'http',
       target: request.url,
-      auth: request.auth,
+      auth: request.auth!,
       agents: {
         claude: decision.agents.includes('claude'),
         codex: decision.agents.includes('codex'),
@@ -571,7 +571,8 @@ export class MockBackend implements Backend {
     const now = Date.now();
     const before = this.state.requests.length;
     this.state.requests = this.state.requests.filter(
-      (r) => r.kind !== 'secret' || r.expiresAt > now,
+      (r) =>
+        r.kind !== 'secret' || r.expiresAt === undefined || r.expiresAt > now,
     );
     if (this.state.requests.length !== before) this.changed();
   }
