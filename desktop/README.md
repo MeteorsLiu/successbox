@@ -115,6 +115,19 @@ RDP 应在普通窗口内适配画面尺寸，不传强制外层全屏参数。g
 
 当前客户端在 viewer 退出时调用 Close，这是前端编排，不是 Display RPC 的断线语义。Close 成功不代表前端已读取成果，当前改动页明确显示未接入。完整用户文件继承、macOS worktree 发布、真实桌面交互和 OBS 全程录像仍须完成验证。
 
+## 一键打包
+
+工作流合入 `main` 后，在仓库的 **Actions → Desktop App → Run workflow** 选择分支并运行。完成后，在该次运行的 **Artifacts** 中下载对应平台的产物：
+
+| 产物                               | 内容                                              |
+| ---------------------------------- | ------------------------------------------------- |
+| `successbox-darwin-arm64-<commit>` | macOS Apple Silicon 的 ZIP，内含 `Successbox.app` |
+| `successbox-linux-x64-<commit>`    | Linux x64 的 ZIP 和 deb 安装包                    |
+
+工作流复用现有 Electron Forge 配置，在各平台原生 runner 上执行 `npm ci`、类型检查、lint 和 `npm run make`。涉及桌面源码、网关协议或该工作流的 PR，以及合入 `main` 的相关提交，也会自动打包。产物名包含构建 commit，上传的是 Forge 生成的分发包，解压 Actions 产物后再打开其中的 ZIP 或 deb。
+
+当前产物是桌面配套应用，包含资源和 `gateway.proto`；沙箱后端、网关程序、kernel 和 rootfs 仍按各模块说明单独准备。工作流不使用签名证书、不做 Apple 公证，也不发布 GitHub Release；打包通过不代表完整 Agent 链路已经验收。
+
 ## 数据与操作
 
 ```text
