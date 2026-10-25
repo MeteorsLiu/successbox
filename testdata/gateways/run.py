@@ -161,7 +161,7 @@ with tempfile.TemporaryDirectory(prefix="successbox-gateways-") as directory:
             for reservation in reservations:
                 reservation.close()
             environment = {"PATH": os.environ["PATH"], "HOME": str(root), "LANG": "C.UTF-8"}
-            process = subprocess.Popen([str(args.sbx.resolve()), "gateways", "--cliproxy", str(args.cliproxy.resolve()), "--llm-config", str(llm_path), "--bifrost", str(args.bifrost.resolve()), "--mcp-dir", str(mcp_dir), "--mcp-port", str(mcp_port)], stdout=log, stderr=log, env=environment)
+            process = subprocess.Popen([str(args.sbx.resolve()), "gateways", "--exit-on-stdin-close", "--cliproxy", str(args.cliproxy.resolve()), "--llm-config", str(llm_path), "--bifrost", str(args.bifrost.resolve()), "--mcp-dir", str(mcp_dir), "--mcp-port", str(mcp_port)], stdin=subprocess.PIPE, stdout=log, stderr=log, env=environment)
             for port in ports:
                 deadline = time.monotonic() + 30
                 while True:
@@ -253,7 +253,7 @@ with tempfile.TemporaryDirectory(prefix="successbox-gateways-") as directory:
             assert len(seen_mcp) == before, "invalid credential reached upstream MCP"
             assert "tools/call" in seen_mcp and len(seen_llm) == 12
             print("MCP initialize/list/call and authentication separation PASS", flush=True)
-            process.send_signal(signal.SIGTERM)
+            process.stdin.close()
             assert process.wait(timeout=15) == 0
             for port in ports:
                 try:

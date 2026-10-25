@@ -20,6 +20,7 @@ struct SuccessboxApple: AsyncParsableCommand {
     @Option(help: "Complete host user directory for the existing tmpfs and worktree mode.") var hostHome: String?
     @Option(help: "Inner gVisor network: none or slirp4netns.") var network: String = "none"
     @Option(help: "slirp4netns executable path inside the Linux VM.") var slirp4netns: String = "/usr/bin/slirp4netns"
+    @Flag(help: "Stop the Linux runtime when the launching desktop closes stdin.") var exitOnStdinClose: Bool = false
 
     mutating func run() async throws {
         guard rdpPort != 0 else { throw ValidationError("rdp-port must be nonzero") }
@@ -93,6 +94,12 @@ struct SuccessboxApple: AsyncParsableCommand {
             }
             defer { output.discard(); logging.cancel() }
             let (stopRequests, stop) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+            if exitOnStdinClose {
+                DispatchQueue.global().async {
+                    while let data = try? FileHandle.standardInput.read(upToCount: 4096), !data.isEmpty {}
+                    stop.yield(())
+                }
+            }
             let signals = [SIGINT, SIGTERM].map { number in
                 signal(number, SIG_IGN)
                 let source = DispatchSource.makeSignalSource(signal: number, queue: .global())

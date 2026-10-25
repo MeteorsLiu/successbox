@@ -18,8 +18,8 @@ with tempfile.TemporaryDirectory(prefix='successbox-home-state-', dir='/tmp') as
     (backend_state / 'private-account').write_text('host-only-test-credential')
     control = stage / 'control.sock'
     with (stage / 'service.log').open('wb') as log:
-        server = subprocess.Popen([apple, '--socket', str(control), '--state', str(state), '--kernel', kernel, '--initfs', initfs,
-            '--linux-rootfs', rootfs, '--runtime-directory', runtime, '--host-home', str(home)], stdout=log, stderr=log)
+        server = subprocess.Popen([apple, '--exit-on-stdin-close', '--socket', str(control), '--state', str(state), '--kernel', kernel, '--initfs', initfs,
+            '--linux-rootfs', rootfs, '--runtime-directory', runtime, '--host-home', str(home)], stdin=subprocess.PIPE, stdout=log, stderr=log)
         box = ''
         prefix = [client, '--socket', str(control)]
         try:
@@ -46,6 +46,6 @@ with tempfile.TemporaryDirectory(prefix='successbox-home-state-', dir='/tmp') as
         finally:
             if server.poll() is None:
                 if box: subprocess.run(prefix + ['close', box], timeout=30, check=True)
-                server.terminate()
+                server.stdin.close()
                 assert server.wait(timeout=30) == 0, (stage / 'service.log').read_text()
 print('shared HOME, native private state, credential masking and disposable writes: PASS')

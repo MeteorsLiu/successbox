@@ -50,7 +50,7 @@ with tempfile.TemporaryDirectory(prefix='successbox-build-') as scratch:
     cmake = ['cmake', '-S', scratch / 'freerdp', '-B', scratch / 'rdp-build', '-DCMAKE_BUILD_TYPE=Release',
         '-DCMAKE_INSTALL_PREFIX=' + str(host / 'rdp'), '-DWITH_SERVER=OFF', '-DWITH_SHADOW=OFF',
         '-DWITH_MANPAGES=OFF', '-DWITH_FFMPEG=OFF', '-DWITH_SWSCALE=OFF', '-DWITH_CUPS=OFF',
-        '-DWITH_PCSC=OFF', '-DWITH_FUSE=OFF', '-DWITH_AAD=OFF', '-DWITH_SAMPLE=OFF', '-DWITH_KRB5=OFF',
+        '-DWITH_PCSC=OFF', '-DCHANNEL_URBDRC=OFF', '-DWITH_FUSE=OFF', '-DWITH_AAD=OFF', '-DWITH_SAMPLE=OFF', '-DWITH_KRB5=OFF',
         '-DWITH_CLIENT_SDL=' + ('ON' if system == 'darwin' else 'OFF'),
         '-DWITH_X11=' + ('OFF' if system == 'darwin' else 'ON'), '-DWITH_CLIENT_MAC=OFF',
         '-DWITH_CLIENT_SDL2=OFF', '-DWITH_CAIRO=OFF', '-DWITH_CLIENT_SDL3=ON', '-DWITH_CLIENT_SDL_VERSIONED=OFF', '-DWITH_BINARY_VERSIONING=OFF']
