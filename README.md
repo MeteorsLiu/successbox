@@ -6,8 +6,9 @@ A local gRPC service for creating sandboxes, executing commands, and connecting 
 | --- | --- | --- |
 | Linux | gVisor `runsc` | Guest `socat` bridges the RDP port through `runsc exec` IO |
 | macOS, Apple Silicon | Apple Containerization / Virtualization.framework | Guest `socat` bridges the RDP port through Containerization's process IO |
+| macOS, Apple Silicon, gVisor mode | Apple Linux VM hosting the Linux gVisor backend | The existing gVisor `Display` stream crosses the VM's socket relay |
 
-Both paths carry RDP bytes through the same `Display` RPC. The macOS backend does not use private Apple APIs, virtual graphics, or USB devices. A headless RDP desktop must already be installed and started inside the supplied guest filesystem.
+All modes carry RDP bytes through the same `Display` RPC. The macOS backend does not use private Apple APIs, virtual graphics, or USB devices. A headless RDP desktop must already be installed and started inside the supplied guest filesystem.
 
 ## Build
 
@@ -43,6 +44,50 @@ On macOS, provide an ARM64 Linux kernel and a Containerization `initfs.ext4` con
 ```
 
 The initfs is separate from the application's rootfs. Both services restrict their control socket to its owner. The service has no external guest network: RDP is reached through the runtime transport, not an exposed host port. `--rdp-port` selects the guest port and defaults to 3389.
+
+### Run gVisor on macOS
+
+The Apple executable can start one Linux VM hosting the existing `successbox-gvisor` service. All sandbox RPCs pass through Containerization's Unix socket/vsock relay. Multiple gVisor sandboxes share that VM; the Swift launcher does not maintain a second sandbox ID table. This uses the Containerization SDK directly and does not require the `container` CLI, containerd, Docker or nested hardware virtualization.
+
+Build the Linux arm64 runtime alongside the signed Apple executable:
+
+```sh
+make apple
+mkdir -p bin/linux-runtime/gvisor-bin
+CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o bin/linux-runtime/successbox-gvisor ./cmd/successbox-gvisor
+CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go -C runtime build -o ../bin/linux-runtime/runsc ./cmd/runsc
+CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go -C runtime build -o ../bin/linux-runtime/gvisor-bin/gvisor_sentry ./cmd/sentry
+
+./bin/successbox-apple \
+  --socket /absolute/path/successbox/control.sock \
+  --state /absolute/path/successbox/state \
+  --kernel /absolute/path/to/vmlinux-arm64 \
+  --initfs /absolute/path/to/initfs.ext4 \
+  --linux-rootfs /absolute/path/to/linux-rootfs \
+  --runtime-directory "$(pwd)/bin/linux-runtime"
+```
+
+The two new options must be supplied together. Without them, the executable continues to provide the original Apple backend. The Linux rootfs must contain `/bin/sh`, `mkdir` and the Linux programs the sandboxes will execute. Both that rootfs and the runtime directory are shared read-only; the VM has a private, sparse 4 GiB ext4 writable layer.
+
+In this mode, `Create.rootfs`, `workingDir` and mount sources refer to paths **inside the Linux VM**. For example, `{"rootfs":"/","workingDir":"/"}` runs a gVisor sandbox using the VM's Linux environment. It does not expose the macOS root filesystem or run macOS applications. Host project sharing and worktree publication back to macOS are outside this startup step.
+
+The Linux init moves itself into `/sys/fs/cgroup/successbox-host` before starting the backend. This leaves the parent free to enable controllers for gVisor's sibling sandbox cgroups; per-sandbox CPU and memory limits remain enabled. The outer runtime receives the existing OCI capabilities plus `CAP_SYS_ADMIN` and `CAP_SYS_RESOURCE` inside its VM. Inner sandbox capabilities remain those of the Linux backend.
+
+The VM uses the pinned SDK's defaults: 4 vCPUs, a 1 GiB outer container memory limit, and 128 MiB of VM overhead. These resources are shared by the Linux backend and its sandboxes. Each `Close` removes only the selected gVisor sandbox. SIGINT or SIGTERM to the Apple launcher asks the Linux backend to close all remaining sandboxes, waits for it to exit, then stops the VM and removes its temporary disk and socket. Boot logs remain under `--state`. Abrupt host termination and restart recovery are not implemented.
+
+The SDK creates the host socket before starting the guest daemon; socket existence alone is not a readiness signal. The forwarded `gVisor backend listening` log indicates that the Linux service has started. Its nonzero exit status is returned by the Apple launcher.
+
+Run the native integration check with prepared kernel, initfs and rootfs assets:
+
+```sh
+go build -o bin/sbx ./cmd/sbx
+python3 testdata/apple-gvisor.py \
+  bin/sbx bin/successbox-apple \
+  /absolute/path/to/vmlinux-arm64 /absolute/path/to/initfs.ext4 \
+  /absolute/path/to/linux-rootfs bin/linux-runtime
+```
+
+The check exercises the socket relay, multiple sandboxes in one VM, filesystem isolation, actual Linux cgroup limits, binary IO, concurrent execution, repeated Close and launcher shutdown with a sandbox still active. It requires macOS 26 or newer on Apple Silicon and runs directly through Virtualization.framework.
 
 ## Create, execute, display, close
 
@@ -94,9 +139,9 @@ Rootfs changes are temporary. gVisor uses its overlay filestore. Apple uses a re
 
 When preparing a rootfs directory from an archive on macOS, preserve its file modes, for example with `tar -xpf rootfs.tar --no-same-owner -C rootfs`. Otherwise paths such as `/tmp` can lose their required 1777 permissions. An ordinary macOS user cannot restore arbitrary Linux owner IDs; the desktop test image initializes its `demo` user's home ownership inside the guest overlay before starting the session services.
 
-Read-only mounts remain read-only. For writable mounts, gVisor applies its overlay; Apple currently copies the supplied source into sandbox state before sharing it. Neither path writes the sandbox's changes back to the host source. Apple mount copies can be expensive for large source directories.
+Read-only mounts remain read-only. For writable mounts, gVisor applies its overlay; the direct Apple backend currently copies the supplied source into sandbox state before sharing it. Neither path writes the sandbox's changes back to the host source. Apple mount copies can be expensive for large source directories.
 
-Apple defaults to 2 vCPUs and a 1 GiB container memory limit, with the SDK's 128 MiB guest overhead added to VM memory. Linux leaves limits unset unless requested; explicit limits require a privileged backend with working cgroups. These defaults are not benchmark settings.
+The direct Apple backend defaults to 2 vCPUs and a 1 GiB container memory limit, with the SDK's 128 MiB guest overhead added to VM memory. Linux leaves limits unset unless requested; explicit limits require a privileged backend with working cgroups. The shared VM used by macOS gVisor mode has the separate defaults described above. These defaults are not benchmark settings.
 
 ## Continuous integration
 
