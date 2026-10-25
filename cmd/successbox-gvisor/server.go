@@ -140,6 +140,11 @@ func (s *server) Create(ctx context.Context, request *pb.CreateRequest) (*pb.San
 		return nil, status.Error(codes.Internal, "cannot create overlay storage")
 	}
 	spec := makeSpec(request)
+	if s.worktreeHelper != "" {
+		if err := hideWorktreeState(spec, s.root); err != nil {
+			return nil, status.Errorf(codes.Internal, "hide runtime state: %v", err)
+		}
+	}
 	if network != nil {
 		resolv := filepath.Join(dir, "resolv.conf")
 		if err := os.WriteFile(resolv, []byte("nameserver 10.0.2.3\n"), 0600); err != nil {
@@ -149,9 +154,6 @@ func (s *server) Create(ctx context.Context, request *pb.CreateRequest) (*pb.San
 		spec.Linux.Namespaces = append(spec.Linux.Namespaces, specs.LinuxNamespace{Type: specs.NetworkNamespace, Path: network.path})
 	}
 	if s.worktreeHelper != "" {
-		if err := hideWorktreeState(spec, s.root); err != nil {
-			return nil, status.Errorf(codes.Internal, "hide runtime state: %v", err)
-		}
 		results := filepath.Join(s.root, "results", id)
 		if err := os.MkdirAll(results, 0711); err != nil {
 			return nil, status.Errorf(codes.Internal, "prepare results: %v", err)

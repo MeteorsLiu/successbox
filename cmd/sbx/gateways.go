@@ -9,6 +9,8 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -30,6 +32,7 @@ func gateways(ctx context.Context, args []string, output io.Writer) error {
 	mcpDir := flags.String("mcp-dir", "", "Bifrost directory containing config.json and its database")
 	mcpPort := flags.Uint("mcp-port", 8081, "Bifrost loopback HTTP port")
 	controlListen := flags.String("control-listen", "", "host HTTP/2 address for GatewaySession, for example 127.0.0.1:9090")
+	dataListen := flags.String("data-listen", "", "guest-reachable HTTP address serving only model and MCP data routes")
 	controlDB := flags.String("control-db", "", "SQLite database for GatewaySession state")
 	frontendToken := flags.String("control-frontend-token", "", "bearer token for the frontend control client")
 	gatewayToken := flags.String("control-gateway-token", "", "bearer token for the MCP gateway control client")
@@ -42,6 +45,9 @@ func gateways(ctx context.Context, args []string, output io.Writer) error {
 	}
 	if *controlListen != "" && *controlDB == "" {
 		return errors.New("--control-db is required when --control-listen is set")
+	}
+	if *dataListen != "" && *controlListen == "" {
+		return errors.New("--data-listen requires GatewaySession control options for MCP")
 	}
 	if *controlListen == "" && (*controlDB != "" || *frontendToken != "" || *gatewayToken != "" || *agentToken != "") {
 		return errors.New("--control-listen is required for GatewaySession control options")
@@ -178,6 +184,51 @@ func gateways(ctx context.Context, args []string, output io.Writer) error {
 		exec.Command(llmExecutable, "-config", llmPath, "-local-model"),
 		exec.Command(mcpExecutable, "-host", "127.0.0.1", "-port", fmt.Sprint(upstreamPort), "-app-dir", mcpPath, "-log-level", "warn"),
 	}
+	var dataErrors <-chan error
+	if *dataListen != "" {
+		listener, err := net.Listen("tcp", *dataListen)
+		if err != nil {
+			return fmt.Errorf("listen gateway data: %w", err)
+		}
+		defer listener.Close()
+		upstream := &url.URL{Scheme: "http", Host: net.JoinHostPort(llm.Server.Host, fmt.Sprint(llm.Server.Port))}
+		proxy := httputil.NewSingleHostReverseProxy(upstream)
+		proxy.FlushInterval = -1
+		proxy.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, _ error) {
+			http.Error(w, "model gateway unavailable", http.StatusBadGateway)
+		}
+		handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// A guest cannot select a destination or reach either native admin API.
+			// Authentication remains owned by CLIProxyAPI and the MCP adapter.
+			if r.URL.Path == "/mcp" {
+				mcp.serveHTTP(w, r)
+				return
+			}
+			allowed := r.Method == http.MethodGet && r.URL.Path == "/v1/models"
+			if r.Method == http.MethodPost {
+				switch r.URL.Path {
+				case "/v1/responses", "/v1/responses/compact", "/v1/messages", "/v1/messages/count_tokens", "/v1/chat/completions":
+					allowed = true
+				}
+			}
+			if !allowed {
+				http.NotFound(w, r)
+				return
+			}
+			r.Header.Del("Forwarded")
+			r.Header.Del("X-Forwarded-For")
+			r.Header.Del("X-Forwarded-Host")
+			r.Header.Del("X-Forwarded-Proto")
+			r.Host = upstream.Host
+			proxy.ServeHTTP(w, r)
+		})
+		dataServer := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second}
+		defer dataServer.Close()
+		failures := make(chan error, 1)
+		dataErrors = failures
+		go func() { failures <- dataServer.Serve(listener) }()
+		fmt.Fprintln(output, "gateway data listening on", listener.Addr())
+	}
 	commands[0].Dir = filepath.Dir(llmPath)
 	commands[1].Dir = mcpPath
 	controlStop, controlErrors, err := startGatewayControl(ctx, *controlListen, *controlDB, map[string]string{
@@ -208,6 +259,11 @@ func gateways(ctx context.Context, args []string, output io.Writer) error {
 		<-gatewayDone
 		return err
 	case err := <-httpErrors:
+		cancel()
+		controlStop()
+		<-gatewayDone
+		return err
+	case err := <-dataErrors:
 		cancel()
 		controlStop()
 		<-gatewayDone
