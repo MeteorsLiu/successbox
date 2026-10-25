@@ -87,7 +87,19 @@ python3 testdata/apple-gvisor.py \
   /absolute/path/to/linux-rootfs bin/linux-runtime
 ```
 
-The check exercises the socket relay, multiple sandboxes in one VM, filesystem isolation, actual Linux cgroup limits, binary IO, concurrent execution, repeated Close and launcher shutdown with a sandbox still active. It requires macOS 26 or newer on Apple Silicon and runs directly through Virtualization.framework.
+The check exercises the socket relay, multiple sandboxes in one VM, filesystem isolation, actual Linux cgroup limits, binary IO, concurrent execution, TTY sizing/resizing/input/Ctrl-C, repeated Close and launcher shutdown with a sandbox still active. It requires macOS 26 or newer on Apple Silicon and runs directly through Virtualization.framework.
+
+For the Display transport, supply a desktop rootfs with `/usr/local/bin/start-desktop` starting xrdp, `/usr/bin/socat`, and its test certificate:
+
+```sh
+python3 testdata/apple-gvisor-display.py \
+  bin/sbx bin/successbox-apple \
+  /absolute/path/to/vmlinux-arm64 /absolute/path/to/initfs.ext4 \
+  /absolute/path/to/desktop-rootfs bin/linux-runtime \
+  /absolute/path/to/test-rdp-certificate.pem
+```
+
+This check negotiates RDP and verifies the TLS certificate through `Display`, disconnects and reconnects, then checks that Exec and cleanup still work. It does not perform graphical login. Separate native validation of this startup mode completed graphical login, a 1024×768 framebuffer capture, a mouse click and keyboard input into xterm; Exec confirmed the terminal received `hello`.
 
 ## Create, execute, display, close
 

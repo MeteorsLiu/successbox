@@ -2,13 +2,19 @@
 """Run against a real Apple VM and Linux arm64 runtime, without Docker."""
 
 import concurrent.futures
+import fcntl
 import json
+import os
 import pathlib
+import pty
+import select
 import shutil
 import signal
 import stat
+import struct
 import subprocess
 import sys
+import termios
 import tempfile
 import time
 
@@ -87,6 +93,48 @@ try:
             result = future.result()
             assert result.returncode == 0 and result.stdout == b"concurrent", result
     print("512 KiB binary IO, stderr, exit status and concurrent Exec: PASS", flush=True)
+
+    terminal_scripts = [
+        "test -t 0 && test -t 1 && test -t 2; stty -echo; "
+        "printf 'INITIAL='; stty size; printf 'READY\\n'; "
+        "while test \"$(stty size)\" != '40 132'; do sleep 0.01; done; "
+        "printf 'RESIZED='; stty size; IFS= read -r line; "
+        "printf 'INPUT=%s\\n' \"$line\"; printf 'STDERR-MERGED\\n' >&2",
+        "trap 'exit 130' INT; printf 'READY\\n'; while :; do sleep 10; done",
+    ]
+    for index, script in enumerate(terminal_scripts):
+        master, slave = pty.openpty()
+        terminal = None
+        try:
+            fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
+            terminal = subprocess.Popen(prefix + ["exec", "--sandbox", boxes[0], "--tty", "--", "/bin/sh", "-ec", script], stdin=slave, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            output = b""
+            deadline = time.monotonic() + 20
+            while b"READY\r\n" not in output:
+                remaining = deadline - time.monotonic()
+                assert remaining > 0, ("terminal readiness timed out", output)
+                readable, _, _ = select.select([terminal.stdout], [], [], remaining)
+                assert readable, ("terminal readiness timed out", output)
+                chunk = os.read(terminal.stdout.fileno(), 32768)
+                assert chunk, ("terminal closed before readiness", output)
+                output += chunk
+            if index == 0:
+                fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 132, 0, 0))
+                terminal.send_signal(signal.SIGWINCH)
+                os.write(master, b"hello-terminal\n")
+            else:
+                os.write(master, b"\x03")
+            tail, errors = terminal.communicate(timeout=20)
+            output = (output + tail).replace(b"\r\n", b"\n")
+            assert not errors, errors
+            assert terminal.returncode == (0 if index == 0 else 130), (terminal.returncode, output)
+            if index == 0:
+                for expected in [b"INITIAL=24 80\n", b"RESIZED=40 132\n", b"INPUT=hello-terminal\n", b"STDERR-MERGED\n"]:
+                    assert expected in output, (expected, output)
+        finally:
+            os.close(master)
+            os.close(slave)
+    print("TTY allocation, resize, interactive input, merged stderr and Ctrl-C: PASS", flush=True)
 
     for box in boxes:
         subprocess.run(prefix + ["close", box], check=True, timeout=30)
