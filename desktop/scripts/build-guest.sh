@@ -26,6 +26,7 @@ sudo chroot "$stage/rootfs" /usr/local/bin/npm install -g @anthropic-ai/claude-c
 sudo umount "$stage/rootfs/proc"
 sudo chroot "$stage/rootfs" dpkg-query -W -f='${Package} ${Version}\n' > "$output/packages.txt"
 sudo chroot "$stage/rootfs" apt-get clean
+sudo rm -rf "$stage/rootfs/root/.npm" "$stage/rootfs/root/.cache"
 sudo rm -f "$stage/rootfs/tmp/chatgpt.deb" "$stage/rootfs/etc/machine-id"
 sudo rm -rf "$stage/rootfs/var/lib/apt/lists/"*
 sudo tar --exclude='rootfs/dev/*' --exclude='rootfs/proc/*' --exclude='rootfs/sys/*' -czf "$output/rootfs.tar.gz" -C "$stage" rootfs

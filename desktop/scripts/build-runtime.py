@@ -9,7 +9,6 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import urllib.request
 
 repo = Path(__file__).resolve().parents[2]
 destination = Path(sys.argv[1]).resolve()
@@ -53,7 +52,7 @@ with tempfile.TemporaryDirectory(prefix='successbox-build-') as scratch:
         '-DWITH_PCSC=OFF', '-DCHANNEL_URBDRC=OFF', '-DWITH_FUSE=OFF', '-DWITH_AAD=OFF', '-DWITH_SAMPLE=OFF', '-DWITH_KRB5=OFF',
         '-DWITH_CLIENT_SDL=' + ('ON' if system == 'darwin' else 'OFF'),
         '-DWITH_X11=' + ('OFF' if system == 'darwin' else 'ON'), '-DWITH_CLIENT_MAC=OFF',
-        '-DWITH_CLIENT_SDL2=OFF', '-DWITH_CAIRO=OFF', '-DWITH_CLIENT_SDL3=ON', '-DWITH_CLIENT_SDL_VERSIONED=OFF', '-DWITH_BINARY_VERSIONING=OFF']
+        '-DWITH_CLIENT_SDL2=OFF', '-DWITH_CAIRO=OFF', '-DWITH_CLIENT_SDL3=ON', '-DWITH_CLIENT_SDL_VERSIONED=OFF', '-DWITH_BINARY_VERSIONING=OFF', '-DWITH_ABSOLUTE_PLUGIN_LOAD_PATHS=OFF']
     if system == 'darwin':
         prefix = subprocess.check_output(['brew', '--prefix'], text=True).strip()
         cmake += ['-DCMAKE_PREFIX_PATH=' + prefix, '-DCMAKE_INSTALL_RPATH=@loader_path/../lib']
@@ -122,8 +121,7 @@ with tempfile.TemporaryDirectory(prefix='successbox-build-') as scratch:
     else:
         url = 'https://persistent.oaistatic.com/codex-app-prod/linux/deb/latest/chatgpt_' + arch + '.deb'
         package = scratch / 'chatgpt.deb'
-        with urllib.request.urlopen(url, timeout=120) as source, package.open('wb') as target:
-            shutil.copyfileobj(source, target)
+        subprocess.run(['curl', '--fail', '--location', '--retry', '3', '--output', package, url], check=True)
         expected = {'amd64': 'eb0831c734f154f93f8ebcf0e17d118da0dea7dc1737dc61a1e71444375bf190', 'arm64': '68de1ec44066871e4177ba1ca793ebee6ba238397f13c794e45b14941c1261fb'}
         with package.open('rb') as stream:
             if hashlib.file_digest(stream, 'sha256').hexdigest() != expected[arch]:

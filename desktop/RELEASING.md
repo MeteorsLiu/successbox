@@ -12,15 +12,15 @@ The macOS helper has an ad-hoc signature with the virtualization entitlement. A 
 
 ## Bundle contents
 
-| Resource | Purpose |
-| --- | --- |
-| `runtime/host/sbx` | Existing sandbox client and host gateway supervisor |
-| `runtime/host/cli-proxy-api`, `bifrost-http`, `plugins/` | Native LLM and MCP gateways and account-binding plugin |
-| `runtime/host/rdp/` | FreeRDP and its bundled libraries; macOS dylibs use bundle-relative paths |
-| `runtime/linux/` | Linux gVisor backend, runsc, Sentry, worktree helper and guest preparation scripts |
-| `runtime/guest/` on macOS | Linux kernel, Containerization init filesystem and application rootfs archive |
-| `runtime/linux/agent/` on Linux | Pinned Linux Codex Desktop package contents, mounted in the private guest view |
-| `runtime/manifest.json` | Platform, architecture, component versions, build commit and file checksums |
+| Resource                                                 | Purpose                                                                            |
+| -------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `runtime/host/sbx`                                       | Existing sandbox client and host gateway supervisor                                |
+| `runtime/host/cli-proxy-api`, `bifrost-http`, `plugins/` | Native LLM and MCP gateways and account-binding plugin                             |
+| `runtime/host/rdp/`                                      | FreeRDP and its bundled libraries; macOS dylibs use bundle-relative paths          |
+| `runtime/linux/`                                         | Linux gVisor backend, runsc, Sentry, worktree helper and guest preparation scripts |
+| `runtime/guest/` on macOS                                | Linux kernel, Containerization init filesystem and application rootfs archive      |
+| `runtime/linux/agent/` on Linux                          | Pinned Linux Codex Desktop package contents, mounted in the private guest view     |
+| `runtime/manifest.json`                                  | Platform, architecture, component versions, build commit and file checksums        |
 
 Runtime resources come from source builds and declared upstream downloads. Packaging does not scan or copy the developer's HOME, `.cache`, `.tools`, credentials, recordings or demo state. The Codex Desktop downloads are checked against recorded checksums; an upstream replacement requires review and an explicit checksum update. Debian package versions are recorded with the guest artifact. The Containerization init layer is pinned by digest.
 

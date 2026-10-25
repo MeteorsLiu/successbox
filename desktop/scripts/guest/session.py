@@ -59,7 +59,7 @@ if mode in ('prepare', 'configure'):
     replacements[user_config] = json.dumps(config)
     state = codex / '.codex-global-state.json'
     data = json.loads(state.read_text()) if state.exists() else {}
-    data.setdefault('electron-persisted-atom-state', {}).update({'electron:onboarding-override': 'auto', 'electron:onboarding-welcome-pending': False, 'electron:onboarding-projectless-completed': True})
+    data.setdefault('electron-persisted-atom-state', {}).update({'electron:onboarding-override': 'auto', 'electron:onboarding-welcome-pending': False, 'electron:onboarding-projectless-completed': True, 'electron:onboarding-hide-first-new-thread-promos': True, 'last_completed_onboarding': int(time.time())})
     data['electron-main-window-bounds'] = {'x': 0, 'y': 0, 'width': 1280, 'height': 800, 'isMaximized': True}
     replacements[state] = json.dumps(data)
     for filename, contents in replacements.items():
