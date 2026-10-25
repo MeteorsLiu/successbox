@@ -41,5 +41,14 @@ jobs:
         run: |
           go build -o "$RUNNER_TEMP/sbx" ./cmd/sbx
           python3 testdata/gateways/install.py "$RUNNER_TEMP/gateways"
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            plugin="$RUNNER_TEMP/successbox.dylib"
+          else
+            plugin="$RUNNER_TEMP/successbox.so"
+          fi
+          go -C gateways/cliproxy build -buildmode=c-shared -o "$plugin" .
+          echo "SUCCESSBOX_PLUGIN=$plugin" >> "$GITHUB_ENV"
       - name: Verify protocols, credentials and shutdown
-        run: python3 testdata/gateways/run.py "$RUNNER_TEMP/sbx" "$RUNNER_TEMP/gateways/cli-proxy-api" "$RUNNER_TEMP/gateways/bifrost-http"
+        run: python3 testdata/gateways/run.py "$RUNNER_TEMP/sbx" "$RUNNER_TEMP/gateways/cli-proxy-api" "$RUNNER_TEMP/gateways/bifrost-http" "$SUCCESSBOX_PLUGIN"
+      - name: Verify token account binding
+        run: python3 testdata/gateways/routing.py "$RUNNER_TEMP/gateways/cli-proxy-api" "$SUCCESSBOX_PLUGIN"

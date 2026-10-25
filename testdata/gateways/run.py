@@ -3,6 +3,8 @@
 import argparse
 import json
 import os
+import platform
+import shutil
 from pathlib import Path
 import signal
 import socket
@@ -19,6 +21,7 @@ parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("sbx", type=Path)
 parser.add_argument("cliproxy", type=Path)
 parser.add_argument("bifrost", type=Path)
+parser.add_argument("plugin", type=Path)
 args = parser.parse_args()
 client_key = "successbox-fixture-llm-client"
 mcp_key = "sk-bf-successbox-fixture-client"
@@ -116,6 +119,13 @@ with tempfile.TemporaryDirectory(prefix="successbox-gateways-") as directory:
     for provider in ["codex", "claude"]:
         model = "successbox-fixture-" + provider
         llm_config["api-keys"][provider] = [{"name": "fixture-" + provider, "base-url": upstream, "proxy-url": "direct", "keys": [{"api-key": upstream_key}], "models": [{"name": model, "alias": model}]}]
+    system = platform.system().lower()
+    architecture = {"x86_64": "amd64", "aarch64": "arm64", "arm64": "arm64"}[platform.machine()]
+    extension = ".dylib" if system == "darwin" else ".so"
+    plugin_target = root / "plugins" / system / architecture / ("successbox" + extension)
+    plugin_target.parent.mkdir(parents=True)
+    shutil.copy2(args.plugin, plugin_target)
+    llm_config["plugins"] = {"enabled": True, "dir": str(root / "plugins"), "configs": {"successbox": {"enabled": True, "bindings": {client_key: {provider: upstream for provider in ["claude", "codex"]}}}}}
     llm_path = root / "llm.json"
     llm_path.write_text(json.dumps(llm_config))
     llm_path.chmod(0o600)

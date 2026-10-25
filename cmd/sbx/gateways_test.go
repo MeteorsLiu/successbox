@@ -2,16 +2,65 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
 )
+
+func TestGatewaysRequireBindingPlugin(t *testing.T) {
+	for _, mode := range []string{"global disabled", "plugin disabled", "not configured", "missing", "directory"} {
+		t.Run(mode, func(t *testing.T) {
+			dir := t.TempDir()
+			extension := ".so"
+			if runtime.GOOS == "darwin" {
+				extension = ".dylib"
+			}
+			pluginPath := filepath.Join(dir, "plugins", runtime.GOOS, runtime.GOARCH, "successbox"+extension)
+			if mode == "directory" {
+				if err := os.MkdirAll(pluginPath, 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			config, err := json.Marshal(map[string]any{
+				"server": map[string]any{"host": "127.0.0.1", "port": 8317},
+				"plugins": map[string]any{
+					"enabled": mode != "global disabled", "dir": "plugins",
+					"configs": map[string]any{"successbox": map[string]any{"enabled": mode != "plugin disabled"}},
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(dir, "llm.json")
+			if err := os.WriteFile(path, config, 0600); err != nil {
+				t.Fatal(err)
+			}
+			err = gateways(context.Background(), []string{"--llm-config", path, "--mcp-dir", dir}, io.Discard)
+			if mode == "not configured" {
+				config, err = json.Marshal(map[string]any{"server": map[string]any{"host": "127.0.0.1", "port": 8317}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, config, 0600); err != nil {
+					t.Fatal(err)
+				}
+				err = gateways(context.Background(), []string{"--llm-config", path, "--mcp-dir", dir}, io.Discard)
+			}
+			if err == nil || !strings.Contains(err.Error(), "successbox token binding plugin") {
+				t.Fatalf("unexpected deployment validation: %v", err)
+			}
+		})
+	}
+}
 
 func TestGatewaysRequireLoopback(t *testing.T) {
 	for _, host := range []string{"", "0.0.0.0", "192.0.2.1"} {
