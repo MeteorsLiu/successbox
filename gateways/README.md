@@ -88,3 +88,11 @@ The adapter serves the existing `/mcp` endpoint and keeps native Bifrost on a pr
 The current host binding uses active Bifrost virtual-key IDs as sandbox scopes. This service does not yet wire those scopes to VM creation or add an Agent launcher. A directory notification is not proof that a particular client has loaded new tools.
 
 Run `SUCCESSBOX_TEST_BIFROST=/absolute/path/to/bifrost-http go test -race ./cmd/sbx -run TestGatewaySession` for the native installation workflow. Cancellation deadlines and live-agent tests are separate changes.
+
+## Cancellation and installation deadlines
+
+An installation expires five minutes after its first submission, including approval and credential input. Duplicate submissions and frontend reconnects keep the original deadline. Expiration cancels the installation context and emits `MCP_INSTALL_CANCELLED`; an active approval returns `ABORTED`. Successful or rejected requests stop their timers, and service shutdown cancels pending work before closing the database.
+
+A trusted host gateway may send `ClientRequest.cancel_sandbox_operations` with its bound sandbox ID. `ServerResponse.sandbox_operations_cancelled` acknowledges idempotent cancellation of that sandbox's current installation and secret waits after installation I/O ends. Other sandboxes and saved data are retained. Frontend/agent callers and cross-sandbox requests are rejected. This hook does not itself stop a VM or revoke LLM/MCP bindings.
+
+Tests cover scope, permissions, repeated cancellation, saved data, interrupted registration HTTP and credential waits, and the exact deadline using virtual time.
