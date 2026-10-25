@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"os"
@@ -18,6 +19,8 @@ import (
 
 func main() {
 	socket := flag.String("socket", "", "path to the private Unix socket")
+	socketUID := flag.Int("socket-uid", -1, "owner UID of the private control socket; defaults to the service user")
+	stdinLifetime := flag.Bool("exit-on-stdin-close", false, "stop the service when its launching desktop closes stdin")
 	state := flag.String("state", "", "directory for this service's sandbox state")
 	binary := flag.String("runsc", "runsc", "runsc executable")
 	worktrees := flag.String("worktrees", "", "worktree policy executable")
@@ -27,6 +30,9 @@ func main() {
 	flag.Parse()
 	if runtime.GOOS != "linux" {
 		log.Fatal("the gVisor backend runs on Linux; use successbox-apple on macOS")
+	}
+	if *socketUID < -1 || uint64(*socketUID+1) >= 1<<32 || (*socketUID != -1 && os.Geteuid() != 0) {
+		log.Fatal("--socket-uid requires a rootful backend and a valid UID")
 	}
 	if *socket == "" || *state == "" || *rdpPort == 0 || *rdpPort > 65535 {
 		log.Fatal("--socket, --state and a valid --rdp-port are required")
@@ -71,6 +77,11 @@ func main() {
 	if err := os.Chmod(*socket, 0600); err != nil {
 		log.Fatal(err)
 	}
+	if *socketUID != -1 {
+		if err := os.Chown(*socket, *socketUID, -1); err != nil {
+			log.Fatal(err)
+		}
+	}
 	if *worktrees != "" {
 		if os.Geteuid() != 0 {
 			log.Fatal("worktrees require a rootful backend")
@@ -90,8 +101,19 @@ func main() {
 	pb.RegisterSandboxServiceServer(rpc, backend)
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(signals)
+	desktopClosed := make(chan struct{})
+	if *stdinLifetime {
+		go func() {
+			_, _ = io.Copy(io.Discard, os.Stdin)
+			close(desktopClosed)
+		}()
+	}
 	go func() {
-		<-signals
+		select {
+		case <-signals:
+		case <-desktopClosed:
+		}
 		backend.shutdown()
 		rpc.Stop()
 	}()
