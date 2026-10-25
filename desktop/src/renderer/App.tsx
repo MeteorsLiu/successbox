@@ -87,19 +87,13 @@ export function App() {
               {state.gatewayControl.message}
             </div>
           )}
-          {page === 'agent' &&
-            (state.simulated ? (
-              <AgentPage
-                state={state}
-                agent={agent}
-                onOpenSettings={() => setPage('settings')}
-              />
-            ) : (
-              <div className="card muted">
-                Agent 启动、账号和沙箱保护开关尚未接入。当前可使用 MCP
-                密钥管理和可信审批窗口。
-              </div>
-            ))}
+          {page === 'agent' && (
+            <AgentPage
+              state={state}
+              agent={agent}
+              onOpenSettings={() => setPage('settings')}
+            />
+          )}
           {page === 'mcp' && <McpPage state={state} />}
           {page === 'changes' &&
             (state.simulated ? (
