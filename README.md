@@ -120,7 +120,18 @@ make check    # Go race tests
   --runsc /absolute/path/to/runsc
 ```
 
-默认网络为 `none`。网关数据入口和宿主控制端口不是同一个地址；不要把管理端口放进 guest。
+需要普通出站网络和 DNS 时，在 Linux 宿主安装 `slirp4netns` 并显式启用：
+
+```sh
+./bin/successbox-gvisor-linux-amd64 \
+  --socket /absolute/path/successbox/control.sock \
+  --state /absolute/path/successbox/state \
+  --runsc /absolute/path/to/runsc \
+  --network slirp4netns \
+  --slirp4netns /absolute/path/to/slirp4netns
+```
+
+每个沙箱使用独立的网络命名空间和 NAT/DNS 实例；`--disable-host-loopback` 阻止访问宿主 loopback。默认 `--network none` 保持离线。`slirp4netns` 不包含在后端二进制中。网关数据入口必须通过 guest 的正常网络可达，宿主管理端口不暴露给 guest。
 
 <a id="lazy-worktrees-on-linux"></a>
 
@@ -153,6 +164,8 @@ sudo ./bin/successbox-gvisor \
 ```
 
 macOS gVisor 模式需要额外提供 Linux rootfs 和 runtime 目录。它运行的是 Linux 程序，不会把 macOS Mach-O 应用放进 guest；宿主项目映射和 worktree 回传也不应从“VM 能启动”推断为已完成。完整命令和图形验证见 [Apple 后端说明](#macos-上的-gvisor) 与测试脚本。
+
+initfs 与应用 rootfs 分开。控制 socket 仅允许属主访问；`--rdp-port` 默认为 3389。macOS gVisor 模式为 Linux VM 接入 NAT vmnet 网络，内部 gVisor 沙箱使用各自的网络命名空间。
 
 <a id="run-gvisor-on-macos"></a>
 

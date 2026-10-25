@@ -78,6 +78,7 @@ struct SuccessboxApple: AsyncParsableCommand {
                 for source in signals { source.cancel() }
             }
             var container: LinuxContainer?
+            var vmnet: VmnetNetwork?
             var created = false
             let exitCode: Int32
             do {
@@ -85,6 +86,13 @@ struct SuccessboxApple: AsyncParsableCommand {
                 let filesystem = try EXT4.Formatter(.init(upper.path), minDiskSize: 4 * 1024 * 1024 * 1024)
                 try filesystem.close()
                 var config = LinuxContainer.Configuration()
+                if #available(macOS 26, *) {
+                    vmnet = try VmnetNetwork()
+                    if let interface = try vmnet!.createInterface(id) {
+                        config.interfaces = [interface]
+                        config.dns = .init(nameservers: [vmnet!.ipv4Gateway.description])
+                    }
+                }
                 config.bootLog = .file(path: root.appendingPathComponent("\(id).boot.log"))
                 // The VM hosts a runtime. Move its init into a leaf cgroup so
                 // runsc can enable controllers for sibling sandbox cgroups.
@@ -134,12 +142,14 @@ struct SuccessboxApple: AsyncParsableCommand {
             } catch {
                 // Keep the disk if stopping fails: the VM may still use it.
                 if created, let container { try await container.stop() }
+                if #available(macOS 26, *) { try? vmnet?.releaseInterface(id) }
                 try FileManager.default.removeItem(at: directory)
                 throw error
             }
             output.finish(.exit(exitCode))
             await logging.value
             try await container!.stop()
+            if #available(macOS 26, *) { try? vmnet?.releaseInterface(id) }
             try FileManager.default.removeItem(at: directory)
             if exitCode != 0 { throw ExitCode(exitCode) }
             return
