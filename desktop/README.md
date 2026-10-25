@@ -91,5 +91,25 @@ desktop/
 
 - 后端全部是模拟数据；“在终端中打开”目前只模拟启动，不会打开真实终端。
 - 命令行集成（`~/.local/bin` 中的包装命令）还没有实现，见 #16 第 7 节。
-- 已在 macOS 上运行和打包验证；Linux 上的托盘依赖 AppIndicator（GNOME 需要安装对应扩展），系统通知和打包结果需要在 Linux 上验证。
 - 除“是否看过首次导入”外，状态不会持久化，重启后恢复为模拟的初始数据。
+- 图标使用了 emoji（🛡、🔒），没有彩色 emoji 字体的系统会显示成方框，之后换成 SVG。
+
+## Linux 说明
+
+已在 Ubuntu 24.04（x86_64）上用虚拟显示运行开发版、打包并安装 deb 验证。托盘和系统通知需要真实的桌面会话，尚未验证；GNOME 上的托盘依赖 AppIndicator 扩展。
+
+- **开发模式启动失败**（`The SUID sandbox helper binary was found, but is not configured correctly`）：Ubuntu 24.04 默认限制非特权用户命名空间，Electron 需要 SUID 的 `chrome-sandbox`。开发时执行一次：
+
+  ```sh
+  sudo chown root:root node_modules/electron/dist/chrome-sandbox
+  sudo chmod 4755 node_modules/electron/dist/chrome-sandbox
+  ```
+
+  deb 安装包已自动设置好，安装后无需处理。
+- **国内网络**：安装依赖和打包时设置镜像，否则下载 Electron 会失败：
+
+  ```sh
+  export npm_config_registry=https://registry.npmmirror.com
+  export ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/
+  ```
+- **打包依赖**：需要 `zip`、`fakeroot`（deb）。rpm 应在 Fedora 等 RPM 系发行版上构建；在 Ubuntu 上 `rpmbuild` 的后处理脚本会失败。

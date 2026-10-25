@@ -15,11 +15,23 @@ const config: ForgeConfig = {
   rebuildConfig: {},
   makers: [
     new MakerZIP({}, ['darwin', 'linux']),
+    // `bin` must match `executableName`; the makers otherwise look for the
+    // package.json name.
     new MakerDeb({
-      options: { name: 'successbox', categories: ['Development'] },
+      options: {
+        name: 'successbox',
+        bin: 'successbox',
+        icon: 'assets/icon.png',
+        categories: ['Development'],
+      },
     }),
     new MakerRpm({
-      options: { name: 'successbox', categories: ['Development'] },
+      options: {
+        name: 'successbox',
+        bin: 'successbox',
+        icon: 'assets/icon.png',
+        categories: ['Development'],
+      },
     }),
   ],
   plugins: [
