@@ -131,8 +131,12 @@ struct SuccessboxApple: AsyncParsableCommand {
                 config.bootLog = .file(path: root.appendingPathComponent("\(id).boot.log"))
                 // The VM hosts a runtime. Move its init into a leaf cgroup so
                 // runsc can enable controllers for sibling sandbox cgroups.
+                let networkSetup = network == "slirp4netns"
+                    ? "mkdir -p /dev/net; test -c /dev/net/tun || mknod /dev/net/tun c 10 200"
+                    : ":"
                 config.process.arguments = ["/bin/sh", "-ec", """
                     mkdir -p /run/successbox
+                    \(networkSetup)
                     mkdir /sys/fs/cgroup/successbox-host
                     printf '%s\\n' "$$" > /sys/fs/cgroup/successbox-host/cgroup.procs
                     exec "$@"
