@@ -39,6 +39,8 @@ func pathnameArguments(name string, args [6]uint64) []pathArgument {
 }
 
 func (m *manager) original(path string) string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	for source, private := range m.mappings {
 		if within(path, private) {
 			return source + strings.TrimPrefix(path, private)
@@ -50,6 +52,8 @@ func (m *manager) original(path string) string {
 // A nested guest mount takes precedence over a repository mapping. In
 // particular, /repo/readonly must not become writable through /private/repo.
 func (m *manager) mapped(path string) string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	boundary := "/"
 	writable := m.root != ""
 	for _, mount := range m.mounts {
@@ -183,8 +187,6 @@ func (m *manager) inspect(c *syscallEvent) error {
 	if !c.First && len(paths) == 0 && c.Name != "getcwd" {
 		return nil
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
 	// The initial cwd is the only directory handle established before the first
 	// callback. Later opens/chdir use rewritten arguments through normal Sentry.
 	if c.First {

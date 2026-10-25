@@ -51,5 +51,33 @@ for uid in 0 1000; do
  git -c safe.directory="$repo" -C "$repo" worktree list --porcelain
  count=$(git -c safe.directory="$repo" -C "$repo" worktree list --porcelain | grep -c '^worktree ')
  test "$count" = 2
+ # Multiple host worktrees share one private Git store, with independent indexes.
+ for number in 1 2 3 4 5 6 7 8; do
+  git -c safe.directory="$repo" -C "$repo" worktree add --detach --quiet "$stage/sources/linked-$uid-$number"
+  chown -R "$uid:$uid" "$stage/sources/linked-$uid-$number"
+ done
+ chown -R "$uid:$uid" "$repo/.git"
+ box=$("$client" --socket "$stage/control.sock" create "$stage/config.json")
+ pids=
+ for number in 1 2 3 4 5 6 7 8; do
+  "$client" --socket "$stage/control.sock" exec --sandbox "$box" -- /bin/sh -ec 'cd "$1"; test "$(cat file)" = original; printf "%s" "$2" > file; git add file; git -c user.name=Test -c user.email=test@example.invalid commit -qm private' probe "$stage/sources/linked-$uid-$number" "guest-$number" &
+  pids="$pids $!"
+ done
+ for pid in $pids; do wait "$pid"; done
+ set -- "$stage/state/results/$box"/common-*
+ test "$#" = 1
+ for number in 1 2 3 4 5 6 7 8; do
+  test "$(cat "$stage/sources/linked-$uid-$number/file")" = original
+ done
+ results=$stage/state/results/$box
+ "$client" --socket "$stage/control.sock" close "$box"
+ box=
+ count=0
+ for result in "$results"/repo-*/worktree; do
+  git -c safe.directory="$repo" -C "$repo" worktree list --porcelain | grep -Fx "worktree $result"
+  value=$(cat "$result/file")
+  test "$value" = original || case "$value" in guest-[1-8]) count=$((count + 1));; *) exit 1;; esac
+ done
+ test "$count" = 8
  done
 printf 'RPC worktrees: root and UID 1000, bootstrap cwd, private directory/file binds, read-only mounts, hidden state, Close registration: PASS\n'
