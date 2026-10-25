@@ -14,9 +14,14 @@ struct SuccessboxApple: AsyncParsableCommand {
     @Option(help: "ARM64 Linux kernel image.") var kernel: String
     @Option(help: "Containerization initfs.ext4 containing vminitd and vmexec.") var initfs: String
     @Option(help: "RDP port inside desktop sandboxes.") var rdpPort: UInt16 = 3389
+    @Option(help: "Linux rootfs directory for hosting the gVisor backend.") var linuxRootfs: String?
+    @Option(help: "Directory containing Linux arm64 successbox-gvisor, runsc and gvisor-bin/gvisor_sentry; requires --linux-rootfs.") var runtimeDirectory: String?
 
     mutating func run() async throws {
         guard rdpPort != 0 else { throw ValidationError("rdp-port must be nonzero") }
+        guard (linuxRootfs == nil) == (runtimeDirectory == nil) else {
+            throw ValidationError("--linux-rootfs and --runtime-directory must be provided together")
+        }
         for path in [socket, state, kernel, initfs] {
             guard path.hasPrefix("/") else { throw ValidationError("paths must be absolute") }
         }
@@ -29,6 +34,116 @@ struct SuccessboxApple: AsyncParsableCommand {
         umask(0o077)
         try FileManager.default.createDirectory(atPath: state, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         try FileManager.default.createDirectory(at: URL(fileURLWithPath: socket).deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        if let linuxRootfs, let runtimeDirectory {
+            // SDK socket relays use write(2). A disconnected RPC client must
+            // produce EPIPE instead of terminating the VM owner with SIGPIPE.
+            signal(SIGPIPE, SIG_IGN)
+            for path in [linuxRootfs, runtimeDirectory] {
+                var directory: ObjCBool = false
+                guard path.hasPrefix("/"), FileManager.default.fileExists(atPath: path, isDirectory: &directory), directory.boolValue else {
+                    throw ValidationError("not an accessible absolute directory: \(path)")
+                }
+            }
+            for name in ["successbox-gvisor", "runsc", "gvisor-bin/gvisor_sentry"] {
+                let path = URL(fileURLWithPath: runtimeDirectory).appendingPathComponent(name).path
+                guard FileManager.default.isExecutableFile(atPath: path) else {
+                    throw ValidationError("runtime executable is missing or not executable: \(path)")
+                }
+            }
+            let root = URL(fileURLWithPath: state)
+            let id = UUID().uuidString.lowercased()
+            let directory = root.appendingPathComponent(id)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+            let output = OutputBuffer()
+            let logging = Task {
+                while let event = await output.next() {
+                    switch event {
+                    case .stdout(let data): try? FileHandle.standardOutput.write(contentsOf: data)
+                    case .stderr(let data): try? FileHandle.standardError.write(contentsOf: data)
+                    default: break
+                    }
+                }
+            }
+            defer { output.discard(); logging.cancel() }
+            let (stopRequests, stop) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+            let signals = [SIGINT, SIGTERM].map { number in
+                signal(number, SIG_IGN)
+                let source = DispatchSource.makeSignalSource(signal: number, queue: .global())
+                source.setEventHandler { stop.yield(()) }
+                source.resume()
+                return source
+            }
+            defer {
+                stop.finish()
+                for source in signals { source.cancel() }
+            }
+            var container: LinuxContainer?
+            var created = false
+            let exitCode: Int32
+            do {
+                let upper = directory.appendingPathComponent("overlay.ext4")
+                let filesystem = try EXT4.Formatter(.init(upper.path), minDiskSize: 4 * 1024 * 1024 * 1024)
+                try filesystem.close()
+                var config = LinuxContainer.Configuration()
+                config.bootLog = .file(path: root.appendingPathComponent("\(id).boot.log"))
+                // The VM hosts a runtime. Move its init into a leaf cgroup so
+                // runsc can enable controllers for sibling sandbox cgroups.
+                config.process.arguments = ["/bin/sh", "-ec", """
+                    mkdir -p /run/successbox
+                    mkdir /sys/fs/cgroup/successbox-host
+                    printf '%s\\n' "$$" > /sys/fs/cgroup/successbox-host/cgroup.procs
+                    exec "$@"
+                    """, "successbox-linux", "/opt/successbox-runtime/successbox-gvisor",
+                    "--socket", "/run/successbox/control.sock", "--state", "/var/lib/successbox",
+                    "--runsc", "/opt/successbox-runtime/runsc", "--rdp-port", String(rdpPort)]
+                config.process.stdout = ProcessOutput(buffer: output, stderr: false)
+                config.process.stderr = ProcessOutput(buffer: output, stderr: true)
+                let extra: [CapabilityName] = [.sysAdmin, .sysResource]
+                config.process.capabilities.bounding += extra
+                config.process.capabilities.effective += extra
+                config.process.capabilities.permitted += extra
+                config.mounts.append(.share(source: runtimeDirectory, destination: "/opt/successbox-runtime", options: ["ro"]))
+                config.sockets = [UnixSocketConfiguration(
+                    source: URL(fileURLWithPath: "/run/successbox/control.sock"),
+                    destination: URL(fileURLWithPath: socket),
+                    permissions: .init(rawValue: 0o600), direction: .outOf)]
+                let vmm = VZVirtualMachineManager(
+                    kernel: Kernel(path: URL(fileURLWithPath: kernel), platform: .linuxArm),
+                    initialFilesystem: .block(format: "ext4", source: initfs, destination: "/", options: ["ro"]))
+                let instance = try LinuxContainer(id,
+                    rootfs: .share(source: linuxRootfs, destination: "/", options: ["ro"]),
+                    writableLayer: .block(format: "ext4", source: upper.path, destination: "/"),
+                    vmm: DirectoryRootfsVMM(base: vmm),
+                    vm: VMResources(cpus: config.cpus, memoryInBytes: config.memoryInBytes + VMResources.guestMemoryOverhead),
+                    configuration: config)
+                container = instance
+                try await instance.create()
+                created = true
+                try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: socket)
+                try await instance.start()
+                let shutdown = Task {
+                    for await _ in stopRequests {
+                        do { try await instance.kill(.term) }
+                        catch {
+                            try? FileHandle.standardError.write(contentsOf: Data("cannot stop Linux backend: \(error)\n".utf8))
+                        }
+                    }
+                }
+                defer { shutdown.cancel() }
+                exitCode = try await instance.wait().exitCode
+            } catch {
+                // Keep the disk if stopping fails: the VM may still use it.
+                if created, let container { try await container.stop() }
+                try FileManager.default.removeItem(at: directory)
+                throw error
+            }
+            output.finish(.exit(exitCode))
+            await logging.value
+            try await container!.stop()
+            try FileManager.default.removeItem(at: directory)
+            if exitCode != 0 { throw ExitCode(exitCode) }
+            return
+        }
         let store = Sandboxes(root: URL(fileURLWithPath: state), kernel: kernel, initfs: initfs)
         let transport = HTTP2ServerTransport.Posix(address: .unixDomainSocket(path: socket), transportSecurity: .plaintext)
         let server = GRPCServer(transport: transport, services: [SandboxService(store: store, rdpPort: rdpPort)])
