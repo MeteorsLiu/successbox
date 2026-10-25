@@ -18,8 +18,9 @@ export function ChangesPage({ state }: { state: AppState }) {
   return (
     <>
       <div className="note" style={{ marginBottom: 14 }}>
-        受保护的 Agent
-        结束后，改动会自动保存在这里。原来的目录不会被修改；系统目录的改动会被丢弃。
+        {state.simulated
+          ? '以下是模拟改动记录，用于预览保存与查看流程。'
+          : '改动记录尚未接入此页面。运行结束和清理成功不代表改动已经保存。'}
       </div>
 
       {live.length > 0 && (
@@ -33,7 +34,9 @@ export function ChangesPage({ state }: { state: AppState }) {
                 <code>{r.cwd}</code>
                 <span className="faint">{r.startedAt} 启动</span>
                 <span className="spacer" />
-                <span className="muted small">结束后保存改动</span>
+                <span className="muted small">
+                  {state.simulated ? '结束后保存改动' : '运行中'}
+                </span>
               </div>
             ))}
           </div>
@@ -42,7 +45,11 @@ export function ChangesPage({ state }: { state: AppState }) {
 
       <div className="h2">已结束</div>
       {state.changes.length === 0 && (
-        <div className="card muted">还没有改动记录</div>
+        <div className="card muted">
+          {state.simulated
+            ? '还没有改动记录'
+            : '暂时无法在此查看已保存的改动。'}
+        </div>
       )}
       <div className="stack">
         {state.changes.map((c) => (

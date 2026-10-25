@@ -2,7 +2,7 @@
 
 Electron 45、React 19、TypeScript 和 Electron Forge。产品设计见 [#16](https://github.com/MeteorsLiu/successbox/issues/16)。
 
-默认连接真实的 `GatewaySession` 控制服务，支持 MCP 安装审批、敏感值弹窗、已保存密钥的列表和删除，以及断线重连。支持通过现有 `sbx` 在系统终端中启动沙箱程序，显示本次运行和退出清理状态。账号管理、全局保护开关、持久运行记录和改动展示尚未接入。沙箱到模型网关的网络仍未接通，因此尚不能完成 Agent 对话流程。
+开发前先读仓库 [AGENTS.md](../AGENTS.md) 及任务对应的 issue。默认连接真实的 `GatewaySession` 控制服务，支持 MCP 安装审批、敏感值弹窗、已保存密钥的列表和删除，以及断线重连。当前 Codex 入口用于 Codex Desktop，通过 Display/RDP 打开图形应用；Claude Code 继续使用终端。账号管理、全局保护开关、持久运行记录和改动展示尚未接入。局部网络和网关验证不代表完整用户环境、worktree 发布和桌面 E2E 已完成。
 
 ## 运行
 
@@ -65,7 +65,7 @@ SUCCESSBOX_GATEWAY_CONFIG=/absolute/path/to/gateway.json npm start
 }
 ```
 
-`terminal` 是宿主命令及参数数组，应用在最后追加私有、可执行的 `.command` 文件。上例是已实测的 macOS Terminal 调用；Linux 需配置能执行该文件的已安装终端启动器。`commands` 可省略，默认使用 `codex`、`claude`。命令与参数逐项引用，不作为未转义的 shell 输入。
+`terminal` 是宿主命令及参数数组，应用在最后追加私有、可执行的 `.command` 文件。上例是已实测的 macOS Terminal 调用；Linux 需配置能执行该文件的已安装终端启动器。Claude Code 的 `commands.claude` 可省略，默认使用 `claude`。真实模式的 Codex Desktop 不使用 `commands.codex`，也不回退为 Codex CLI。命令与参数逐项引用，不作为未转义的 shell 输入。
 
 `client`、`socket`、`create` 必须是宿主绝对路径。`create` 内容是原有 Create 请求 JSON，原样交给 `sbx`。rootfs、挂载和工作目录由后端解释：macOS gVisor 模式下指 Linux VM 内的路径，不能当成 macOS 项目路径。运行环境必须已包含待执行的 Linux 程序及 PATH。启动终端不要求网关控制流已连接，也不会自动创建账号或网关绑定。
 
@@ -97,6 +97,23 @@ SUCCESSBOX_GATEWAY_CONFIG=/absolute/path/to/gateway.json npm start
 | hangup    | 与 interrupt 相同，驱动关闭 PTY                                                                | 129        |
 
 驱动等待 `TERMINAL_READY`，执行对应操作并断言最终退出码；还需检查前端移除运行记录、后端 ID 已不能执行。本测试不读取真实账号。
+
+## Codex Desktop 当前接线
+
+真实模式的 Codex 需要同一连接配置中的 `sandbox.desktop`。它复用已有 `launchInTerminal(agent)` IPC 方法和 `sbx create/exec/display/close`，方法旧名不表示仍然启动 CLI。没有 desktop 配置时明确报错；Claude Code 不读取该配置。
+
+| 字段                      | 当前含义                                                                       |
+| ------------------------- | ------------------------------------------------------------------------------ |
+| `sandbox.create`          | 现有 Create JSON，必须设置 `desktop: true`                                     |
+| `sandbox.desktop.viewer`  | 宿主 RDP 客户端参数数组，包含 `{address}`；替换为 Display 转发的 loopback 地址 |
+| `sandbox.desktop.prepare` | 可选的 guest 准备命令参数数组                                                  |
+| `sandbox.desktop.command` | 可选的 guest 图形应用命令参数数组                                              |
+
+当前顺序是 Create → prepare → Display 转发 → application/viewer。应用启动命令必须等待 guest 图形会话可用。viewer 启动不等于应用可用，也不等于个人配置和网关绑定已经完成。不得在 prepare 中全量复制用户目录或以少数配置白名单替代完整文件视图；文件接入须走 #7 的 tmpfs + worktree 流程，并确认后端实际启用了 `--worktrees`。
+
+RDP 应在普通窗口内适配画面尺寸，不传强制外层全屏参数。guest 应用最大化与 RDP 分辨率/缩放是两个步骤，需要同时验证键鼠坐标和窗口缩放。
+
+当前客户端在 viewer 退出时调用 Close，这是前端编排，不是 Display RPC 的断线语义。Close 成功不代表前端已读取成果，当前改动页明确显示未接入。完整用户文件继承、macOS worktree 发布、真实桌面交互和 OBS 全程录像仍须完成验证。
 
 ## 数据与操作
 

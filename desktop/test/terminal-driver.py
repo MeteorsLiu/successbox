@@ -11,8 +11,8 @@ import termios
 import sys
 import time
 
-if len(sys.argv) != 4 or sys.argv[1] not in ['input', 'interrupt', 'hangup']:
-    raise SystemExit('usage: terminal-driver.py input|interrupt|hangup OUTPUT COMMAND_FILE')
+if len(sys.argv) != 4 or sys.argv[1] not in ['input', 'interrupt', 'hangup', 'model']:
+    raise SystemExit('usage: terminal-driver.py input|interrupt|hangup|model OUTPUT COMMAND_FILE')
 mode, output, script = sys.argv[1:]
 pid, terminal = pty.fork()
 if pid == 0:
@@ -50,11 +50,13 @@ try:
             time.sleep(0.1)
         ended, status = os.waitpid(pid, os.WNOHANG)
         if ended:
-            assert sent, data.decode(errors='replace')
+            assert sent or mode == 'model', data.decode(errors='replace')
+            if mode == 'model':
+                assert b'desktop-model-ok' in data, data.decode(errors='replace')
             if mode == 'input':
                 assert b'INPUT_OK' in data, data.decode(errors='replace')
             pathlib.Path(output).write_bytes(data)
-            expected = {'input': 0, 'interrupt': 130, 'hangup': 129}[mode]
+            expected = {'input': 0, 'interrupt': 130, 'hangup': 129, 'model': 0}[mode]
             assert os.waitstatus_to_exitcode(status) == expected, (status, data.decode(errors='replace'))
             raise SystemExit(0)
 finally:

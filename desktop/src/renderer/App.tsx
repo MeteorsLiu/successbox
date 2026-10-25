@@ -95,12 +95,7 @@ export function App() {
             />
           )}
           {page === 'mcp' && <McpPage state={state} />}
-          {page === 'changes' &&
-            (state.simulated ? (
-              <ChangesPage state={state} />
-            ) : (
-              <div className="card muted">运行记录和改动结果尚未接入。</div>
-            ))}
+          {page === 'changes' && <ChangesPage state={state} />}
           {page === 'settings' && (
             <SettingsPage state={state} onReimport={() => setWelcome(true)} />
           )}
