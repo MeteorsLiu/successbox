@@ -221,6 +221,22 @@ func TestGatewaySessionMCPInstallApproval(t *testing.T) {
 	server.mcp = adapter
 	endpoint := httptest.NewServer(http.HandlerFunc(adapter.serveHTTP))
 	t.Cleanup(endpoint.Close)
+	var agentTurn func(string, string) bool
+	var refreshTools func()
+	if binary := os.Getenv("SUCCESSBOX_TEST_CODEX"); binary != "" {
+		authFile := os.Getenv("SUCCESSBOX_TEST_CODEX_AUTH")
+		if authFile == "" {
+			t.Fatal("SUCCESSBOX_TEST_CODEX_AUTH must point to an authorized Codex auth file")
+		}
+		agentTurn, refreshTools = gatewayCodexTestSession(t, binary, endpoint.URL, authFile)
+	} else if binary := os.Getenv("SUCCESSBOX_TEST_CLAUDE"); binary != "" {
+		agentTurn = gatewayClaudeTestSession(t, binary, endpoint.URL, os.Getenv("SUCCESSBOX_TEST_CODEX_AUTH"))
+		refreshTools = func() {} // Claude must consume the native MCP listChanged notification.
+	}
+	if agentTurn != nil {
+		agentTurn("This is a sandbox gateway integration test. Reply READY only, without calling any tools.", "")
+		t.Log("Agent completed the initial model turn before MCP installation")
+	}
 	client := &http.Client{Timeout: 15 * time.Second}
 	call := func(token, session, method string, params any) (map[string]any, string) {
 		t.Helper()
@@ -280,6 +296,12 @@ func TestGatewaySessionMCPInstallApproval(t *testing.T) {
 	front := gatewayTestClient(t, server, "frontend", "front")
 	openGatewayTestSession(t, front, "A")
 	params := map[string]any{"name": "request_mcp_install", "arguments": map[string]any{"mcp_name": "project", "transport": "http", "endpoint": upstream.URL, "requested_tools": []string{"search"}, "credential_fields": []string{"api_key"}}}
+	if agentTurn != nil {
+		arguments, _ := json.Marshal(params["arguments"])
+		if !agentTurn("Call the registered request_mcp_install tool once with exactly these arguments: "+string(arguments)+". This requests approval from the separate frontend. Do not read files, run shell commands, request real credentials, or call another tool. Stop when the request is pending.", "request_mcp_install") {
+			t.Fatal("Agent did not submit an installation request through the MCP gateway")
+		}
+	}
 	submitted, _ := call(adapter.keys["A"], sessionA, "tools/call", params)
 	if submitted["error"] != nil {
 		t.Fatalf("submit: %v", submitted)
@@ -419,5 +441,18 @@ func TestGatewaySessionMCPInstallApproval(t *testing.T) {
 		t.Fatalf("registered endpoint was not reused: id=%q error=%v", reused, err)
 	}
 	t.Log("same-session install, real client ID, secret input, SSE notification, tool execution, endpoint reuse and A/B isolation passed")
+	if agentTurn != nil {
+		refreshTools()
+		callsBefore := upstreamCalls.Load()
+		// The gateway policy is the only source of the placeholder syntax in
+		// the model conversation. This also detects skipped prompt injection.
+		if !agentTurn("The project-search MCP tool is now installed and approved. Call it once to verify the connection, following the gateway's instructions for sensitive fields. Do not request a real key, use shell tools, or read files. Report its result.", "project-search") {
+			t.Fatalf("Agent did not successfully call the newly installed tool in the same thread; observed upstream calls during model turn: %d", upstreamCalls.Load()-callsBefore)
+		}
+		if os.Getenv("SUCCESSBOX_TEST_BIFROST") != "" && upstreamCalls.Load()-callsBefore != 1 {
+			t.Fatalf("expected exactly one model-driven upstream call, got %d", upstreamCalls.Load()-callsBefore)
+		}
+		t.Log("Agent called the new MCP tool in the same conversation")
+	}
 
 }

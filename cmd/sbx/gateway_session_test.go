@@ -30,6 +30,9 @@ func gatewayTestClient(t *testing.T, server *gatewayServer, kind, token string) 
 	go func() { _ = rpc.Serve(listener) }()
 	t.Cleanup(func() { rpc.Stop(); _ = listener.Close() })
 	timeout := 10 * time.Second
+	if os.Getenv("SUCCESSBOX_TEST_CODEX") != "" || os.Getenv("SUCCESSBOX_TEST_CLAUDE") != "" {
+		timeout = 3 * time.Minute
+	}
 	ctx, cancel := context.WithTimeout(metadata.NewOutgoingContext(context.Background(), metadata.Pairs("x-successbox-client", kind, "authorization", "Bearer "+token)), timeout)
 	t.Cleanup(cancel)
 	connection, err := grpc.NewClient(listener.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
