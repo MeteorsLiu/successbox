@@ -1,11 +1,20 @@
 import { app, dialog, Notification } from 'electron';
 import path from 'node:path';
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
+import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import * as grpc from '@grpc/grpc-js';
 import { loadSync } from '@grpc/proto-loader';
-import type { AppState, DiffFile, InstallDecision } from '../shared/types';
-import { AGENT_NAMES } from '../shared/agents';
+import type {
+  AgentId,
+  AppState,
+  DiffFile,
+  InstallDecision,
+} from '../shared/types';
+import { AGENT_COMMANDS, AGENT_NAMES } from '../shared/agents';
 import type { Backend, BackendEvent } from './backend/backend';
 import { MockBackend } from './backend/mock';
 import { registerIpc } from './ipc';
@@ -487,8 +496,153 @@ class GatewayBackend implements Backend {
   async getDiff(): Promise<DiffFile[]> {
     return this.unavailable();
   }
-  async launchInTerminal() {
-    this.unavailable();
+  async launchInTerminal(agent: AgentId) {
+    if (agent !== 'claude' && agent !== 'codex') throw new Error('未知 Agent');
+    if (process.platform !== 'darwin' && process.platform !== 'linux')
+      throw new Error('当前仅支持 macOS 和 Linux 终端');
+    const file =
+      process.env.SUCCESSBOX_GATEWAY_CONFIG ??
+      path.join(app.getPath('userData'), 'gateway.json');
+    const configuration = JSON.parse(await readFile(file, 'utf8')) as {
+      sandbox?: {
+        client: string;
+        socket: string;
+        create: string;
+        terminal: string[];
+        commands?: Partial<Record<AgentId, string[]>>;
+      };
+    };
+    const sandbox = configuration.sandbox;
+    if (
+      !sandbox ||
+      ![sandbox.client, sandbox.socket, sandbox.create].every(
+        (value) => typeof value === 'string' && path.isAbsolute(value),
+      ) ||
+      !Array.isArray(sandbox.terminal) ||
+      sandbox.terminal.length === 0 ||
+      sandbox.terminal.some((value) => typeof value !== 'string' || !value)
+    )
+      throw new Error(
+        '请在连接配置中填写 sandbox 的 client、socket、create 和 terminal',
+      );
+    const argv = sandbox.commands?.[agent] ?? [AGENT_COMMANDS[agent]];
+    if (
+      !Array.isArray(argv) ||
+      argv.length === 0 ||
+      argv.some((value) => typeof value !== 'string' || !value)
+    )
+      throw new Error('Agent 启动参数必须是非空字符串数组');
+    const request = await readFile(sandbox.create, 'utf8');
+    const options = JSON.parse(request) as {
+      workingDir?: string;
+      working_dir?: string;
+    };
+    const directory = await mkdtemp(
+      path.join(tmpdir(), 'successbox-terminal-'),
+    );
+    const script = path.join(directory, 'launch.command');
+    const result = path.join(directory, 'result');
+    const identity = path.join(directory, 'sandbox-id');
+    const cleanupLog = path.join(directory, 'close.log');
+    const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
+    const command = [sandbox.client, '--socket', sandbox.socket]
+      .map(quote)
+      .join(' ');
+    const id = randomUUID();
+    let observed = false;
+    let timer: ReturnType<typeof setInterval> | undefined;
+    try {
+      await writeFile(path.join(directory, 'create.json'), request, {
+        mode: 0o600,
+      });
+      // The terminal owns Create/Exec/Close independently of the desktop UI.
+      // A shell defers traps while waiting for a foreground command. Use its
+      // interruptible wait builtin so terminal HUP can Close a running guest.
+      const cleanup = [
+        'code=$?',
+        'trap - EXIT HUP INT TERM',
+        'closed=0',
+        `if [ -n "$sandbox_id" ]; then ${command} close "$sandbox_id" > ${quote(cleanupLog)} 2>&1; closed=$?; fi`,
+        'if [ -n "$worker" ] && [ "$closed" -eq 0 ]; then wait "$worker"; fi',
+        `printf '%s %s\\n' "$code" "$closed" > ${quote(result + '.tmp')}`,
+        `mv ${quote(result + '.tmp')} ${quote(result)}`,
+        'exit "$code"',
+      ].join('; ');
+      await writeFile(
+        script,
+        [
+          '#!/bin/sh',
+          'umask 077',
+          "sandbox_id=''",
+          "worker=''",
+          `trap ${quote(cleanup)} EXIT`,
+          "trap 'exit 129' HUP",
+          "trap 'exit 130' INT",
+          "trap 'exit 143' TERM",
+          `sandbox_id=$(${command} create ${quote(path.join(directory, 'create.json'))}) || exit $?`,
+          `printf '%s\\n' "$sandbox_id" > ${quote(identity)}`,
+          `printf '%s\\n' ${quote('Successbox · ' + AGENT_NAMES[agent] + ' · 沙箱终端')}`,
+          `${command} exec --sandbox "$sandbox_id" --tty -- ${argv.map(quote).join(' ')} < /dev/tty &`,
+          'worker=$!',
+          'wait "$worker"',
+          '',
+        ].join('\n'),
+        { mode: 0o700 },
+      );
+      this.state.runs.push({
+        id,
+        agent,
+        cwd: options.workingDir ?? options.working_dir ?? '/',
+        protected: true,
+        startedAt: new Date().toLocaleString(),
+        status: 'starting',
+      });
+      this.state.terminalMessage = '正在打开沙箱终端';
+      this.changed();
+      // Poll only this invocation's private files. The shell atomically
+      // publishes result after Close, independently of the launcher's lifetime.
+      timer = setInterval(() => {
+        const run = this.state.runs.find((item) => item.id === id);
+        if (!observed && existsSync(identity)) {
+          observed = true;
+          if (run) {
+            run.sandboxId = readFileSync(identity, 'utf8').trim();
+            run.status = 'running';
+          }
+          this.state.terminalMessage =
+            '终端已连接沙箱；本轮尚未接入沙箱到模型网关的网络';
+          this.changed();
+        }
+        if (!existsSync(result)) return;
+        clearInterval(timer);
+        const [exitCode, closeCode] = readFileSync(result, 'utf8')
+          .trim()
+          .split(/\s+/)
+          .map(Number);
+        if (closeCode !== 0) {
+          if (run) run.status = 'cleanup-failed';
+          this.state.terminalMessage = `程序已退出，但沙箱关闭失败。沙箱 ${run?.sandboxId ?? id}；详情：${cleanupLog}`;
+        } else {
+          this.state.runs = this.state.runs.filter((item) => item.id !== id);
+          this.state.terminalMessage = `${AGENT_NAMES[agent]} 终端已结束（退出码 ${exitCode}），沙箱已清理`;
+          void rm(directory, { recursive: true, force: true }).catch(() => {});
+        }
+        this.changed();
+      }, 250);
+      timer.unref();
+      const [terminal, ...args] = sandbox.terminal;
+      await promisify(execFile)(terminal, [...args, script]);
+    } catch (error) {
+      // A terminal may return nonzero after running the script. Its result
+      // remains authoritative; do not remove files while its cleanup is active.
+      if (observed || existsSync(identity) || existsSync(result)) throw error;
+      clearInterval(timer);
+      this.state.runs = this.state.runs.filter((item) => item.id !== id);
+      this.state.terminalMessage = '终端未能启动';
+      this.changed();
+      await rm(directory, { recursive: true, force: true });
+      throw error;
+    }
   }
   async importConfigs() {
     this.unavailable();

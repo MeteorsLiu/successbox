@@ -2,7 +2,7 @@
 
 Electron 45、React 19、TypeScript 和 Electron Forge。产品设计见 [#16](https://github.com/MeteorsLiu/successbox/issues/16)。
 
-默认连接真实的 `GatewaySession` 控制服务，支持 MCP 安装审批、敏感值弹窗、已保存密钥的列表和删除，以及断线重连。Agent 启动、账号管理、沙箱保护开关、运行记录和改动展示尚未接入，界面会明确提示。
+默认连接真实的 `GatewaySession` 控制服务，支持 MCP 安装审批、敏感值弹窗、已保存密钥的列表和删除，以及断线重连。支持通过现有 `sbx` 在系统终端中启动沙箱程序，显示本次运行和退出清理状态。账号管理、全局保护开关、持久运行记录和改动展示尚未接入。沙箱到模型网关的网络仍未接通，因此尚不能完成 Agent 对话流程。
 
 ## 运行
 
@@ -35,6 +35,56 @@ SUCCESSBOX_GATEWAY_CONFIG=/absolute/path/to/gateway.json npm start
 `address` 是本机 TCP HTTP/2 控制地址，不是 LLM/MCP 的 HTTP 数据地址，也不是沙箱 socket。本轮使用本机明文 gRPC，不提供远程 TLS 配置。`sandboxIds` 对应网关已有的沙箱绑定，用来读取启动时的密钥列表；新收到的请求或事件还会加入其所属范围。现有协议没有列出所有沙箱的消息。未设置环境变量时读取 Electron `userData` 目录中的 `gateway.json`；配置缺失或无效时保持未连接状态。
 
 如需查看原来的模拟界面，显式运行 `SUCCESSBOX_DEMO=1 npm start`，再使用设置页的模拟按钮。模拟模式不连接真实网关。
+
+## 沙箱终端
+
+按仓库 [运行说明](../README.md#start-the-service) 启动后端后，在同一个连接配置中添加 `sandbox`。前端复用既有 `launchInTerminal(agent)`，不新增 RPC 或 preload 方法：
+
+```json
+{
+  "sandbox": {
+    "client": "/absolute/path/to/sbx",
+    "socket": "/absolute/path/to/control.sock",
+    "create": "/absolute/path/to/box.json",
+    "terminal": ["/usr/bin/open", "-a", "Terminal"],
+    "commands": {
+      "codex": ["codex"],
+      "claude": ["claude"]
+    }
+  }
+}
+```
+
+`terminal` 是宿主命令及参数数组，应用在最后追加私有、可执行的 `.command` 文件。上例是已实测的 macOS Terminal 调用；Linux 需配置能执行该文件的已安装终端启动器。`commands` 可省略，默认使用 `codex`、`claude`。命令与参数逐项引用，不作为未转义的 shell 输入。
+
+`client`、`socket`、`create` 必须是宿主绝对路径。`create` 内容是原有 Create 请求 JSON，原样交给 `sbx`。rootfs、挂载和工作目录由后端解释：macOS gVisor 模式下指 Linux VM 内的路径，不能当成 macOS 项目路径。运行环境必须已包含待执行的 Linux 程序及 PATH。启动终端不要求网关控制流已连接，也不会自动创建账号或网关绑定。
+
+每次点击创建独立沙箱。终端脚本执行 Create → Exec（PTY）→ Close，桌面观察该次运行的私有状态文件。退出桌面 UI 不会关闭正在使用的终端，重新打开 UI 暂不恢复原运行列表。程序退出或终端在 Exec 期间收到 HUP 后，脚本负责 Close；成功时界面移除记录，失败则保留沙箱 ID 和日志路径。启动失败不会退回宿主执行。
+
+脚本将客户端作为后台子进程运行，显式从 `/dev/tty` 继承输入，用 shell 内置 `wait` 等待。直接等待前台命令会延迟 HUP trap；内置 `wait` 可以被信号中断，及时执行 Close，并在关闭成功后等待客户端退出。
+
+### 验证终端
+
+本轮在 macOS arm64 打包应用 → 系统 Terminal/测试 PTY → Apple VM 内的真实 gVisor 上验证。两个 Agent 入口使用合成 shell 程序验证接线，不代表 Claude/Codex 已完成模型请求。覆盖正常与非零退出、引号参数、终端输入、Ctrl-C 和关闭 PTY。关闭后再次 Exec 对应 ID 返回 NotFound，宿主子进程也已退出。Linux 桌面启动器尚未实测。
+
+`test/terminal-driver.py` 可替代系统终端启动器。将 `sandbox.terminal` 配置为以下数组，在待测试 Agent 的命令中使用 `/bin/sh -c` 加下表内容，再从前端点击启动：
+
+```json
+[
+  "/absolute/path/to/python3",
+  "/absolute/path/to/desktop/test/terminal-driver.py",
+  "input",
+  "/tmp/terminal-output.log"
+]
+```
+
+| 模式      | 测试命令                                                                                       | 预期退出码 |
+| --------- | ---------------------------------------------------------------------------------------------- | ---------- | ---------------------------- | --- |
+| input     | `stty -echo; printf 'TERMINAL_READY\n'; IFS= read -r line; test "$line" = 'hello from desktop' |            | exit 8; printf 'INPUT_OK\n'` | 0   |
+| interrupt | `trap 'exit 130' INT; printf 'TERMINAL_READY\n'; while :; do sleep 1; done`                    | 130        |
+| hangup    | 与 interrupt 相同，驱动关闭 PTY                                                                | 129        |
+
+驱动等待 `TERMINAL_READY`，执行对应操作并断言最终退出码；还需检查前端移除运行记录、后端 ID 已不能执行。本测试不读取真实账号。
 
 ## 数据与操作
 

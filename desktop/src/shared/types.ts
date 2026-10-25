@@ -48,6 +48,8 @@ export interface Run {
   cwd: string;
   protected: boolean;
   startedAt: string;
+  sandboxId?: string;
+  status?: 'starting' | 'running' | 'cleanup-failed';
 }
 
 export interface ChangeRecord {
@@ -125,6 +127,7 @@ export interface AppState {
   firstRun: boolean;
   /** True while the backend is the built-in simulation. */
   simulated: boolean;
+  terminalMessage?: string;
   gatewayControl?: {
     status: 'connected' | 'connecting' | 'disconnected';
     message: string;

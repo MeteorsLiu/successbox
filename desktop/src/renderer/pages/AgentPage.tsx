@@ -28,6 +28,54 @@ export function AgentPage({
     setBusy(null);
   };
 
+  if (!state.simulated) {
+    const runs = state.runs.filter((run) => run.agent === agent);
+    return (
+      <>
+        <div className="h2">{name} 沙箱终端</div>
+        <div className="note">
+          在隔离环境中启动 {name}
+          。本轮接入终端和退出清理；沙箱到模型网关的网络、账号管理及改动展示尚未接入。
+        </div>
+        <div className="card row">
+          <div style={{ flex: 1 }}>
+            使用宿主配置指定的运行环境，不会退回宿主直接执行。
+          </div>
+          <button
+            className="btn primary"
+            disabled={busy === 'launch'}
+            onClick={async () => {
+              setBusy('launch');
+              await toast.run(api.launchInTerminal(agent));
+              setBusy(null);
+            }}
+          >
+            {busy === 'launch' ? '正在打开…' : '在终端中打开'}
+          </button>
+        </div>
+        {state.terminalMessage && <p role="status">{state.terminalMessage}</p>}
+        {runs.map((run) => (
+          <div className="card" key={run.id}>
+            <div className="row">
+              <b>{run.cwd}</b>
+              <span className="tag">
+                {run.status === 'starting'
+                  ? '正在启动'
+                  : run.status === 'cleanup-failed'
+                    ? '清理失败'
+                    : '运行中'}
+              </span>
+            </div>
+            <div className="muted small">
+              {run.startedAt}
+              {run.sandboxId && ` · ${run.sandboxId}`}
+            </div>
+          </div>
+        ))}
+      </>
+    );
+  }
+
   return (
     <>
       <ProtectionCard state={state} agent={agent} />
