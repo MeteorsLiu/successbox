@@ -142,6 +142,6 @@ else:
         os.setgroups([])
         os.setgid(options['gid'])
         os.setuid(options['uid'])
-    argv = ['/usr/bin/chatgpt']
+    argv = ['/usr/bin/chatgpt', '--remote-debugging-port=9333', '--remote-debugging-address=127.0.0.1']
     if not options['uid']: argv += ['--no-sandbox']
     os.execv(argv[0], argv)

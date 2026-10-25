@@ -135,7 +135,8 @@ with tempfile.TemporaryDirectory(prefix='successbox-build-') as scratch:
         with package.open('rb') as stream:
             (destination / 'chatgpt-download.sha256').write_text(hashlib.file_digest(stream, 'sha256').hexdigest() + '\n')
     (linux / 'scripts').mkdir()
-    shutil.copy2(repo / 'desktop/scripts/guest/session.py', linux / 'scripts/session.py')
+    for name in ('session.py', 'reload-mcp.mjs'):
+        shutil.copy2(repo / 'desktop/scripts/guest' / name, linux / 'scripts' / name)
     if system == 'linux':
         subprocess.run(['npm', 'install', '--prefix', linux / 'claude', '--omit=dev', '@anthropic-ai/claude-code@2.1.310'], check=True)
         shutil.copy2(shutil.which('node'), linux / 'node')
@@ -149,10 +150,11 @@ with tempfile.TemporaryDirectory(prefix='successbox-build-') as scratch:
             module, count = decoder.raw_decode(data.lstrip())
             data = data.lstrip()[count:]
             if not module.get('Dir'): continue
-            label = module['Path'].replace('/', '_')
+            label = module['Path'].replace('/', '_') + '@' + module.get('Version', 'local')
             for name in ('LICENSE', 'LICENSE.txt', 'LICENSE.md', 'NOTICE', 'COPYING', 'COPYRIGHT'):
                 source = Path(module['Dir']) / name
-                if source.is_file(): shutil.copy2(source, notices / (label + '-' + name))
+                if source.is_file() and not (notices / (label + '-' + name)).exists():
+                    shutil.copy2(source, notices / (label + '-' + name))
     if system == 'darwin':
         for dependency in (repo / '.build/checkouts').iterdir():
             for name in ('LICENSE', 'LICENSE.txt', 'LICENSE.md', 'NOTICE'):
