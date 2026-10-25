@@ -16,11 +16,32 @@ struct SuccessboxApple: AsyncParsableCommand {
     @Option(help: "RDP port inside desktop sandboxes.") var rdpPort: UInt16 = 3389
     @Option(help: "Linux rootfs directory for hosting the gVisor backend.") var linuxRootfs: String?
     @Option(help: "Directory containing Linux arm64 successbox-gvisor, runsc and gvisor-bin/gvisor_sentry; requires --linux-rootfs.") var runtimeDirectory: String?
+    @Option(help: "Memory in MiB for the Linux VM hosting gVisor.") var runtimeMemoryMib: UInt64 = 1024
+    @Option(help: "Complete host user directory for the existing tmpfs and worktree mode.") var hostHome: String?
+    @Option(help: "Inner gVisor network: none or slirp4netns.") var network: String = "none"
+    @Option(help: "slirp4netns executable path inside the Linux VM.") var slirp4netns: String = "/usr/bin/slirp4netns"
 
     mutating func run() async throws {
         guard rdpPort != 0 else { throw ValidationError("rdp-port must be nonzero") }
+        guard network == "none" || network == "slirp4netns" else {
+            throw ValidationError("--network must be none or slirp4netns")
+        }
+        guard network == "none" || (linuxRootfs != nil && slirp4netns.hasPrefix("/")) else {
+            throw ValidationError("networking requires gVisor mode and an absolute VM slirp4netns path")
+        }
         guard (linuxRootfs == nil) == (runtimeDirectory == nil) else {
             throw ValidationError("--linux-rootfs and --runtime-directory must be provided together")
+        }
+        guard runtimeMemoryMib > 0,
+              runtimeMemoryMib <= (UInt64(Int64.max) - VMResources.guestMemoryOverhead) / (1024 * 1024) else {
+            throw ValidationError("--runtime-memory-mib must be nonzero and fit the VM memory range")
+        }
+        if let hostHome {
+            var directory: ObjCBool = false
+            guard linuxRootfs != nil, hostHome.hasPrefix("/"), hostHome != "/",
+                  FileManager.default.fileExists(atPath: hostHome, isDirectory: &directory), directory.boolValue else {
+                throw ValidationError("--host-home requires gVisor mode and an accessible absolute user directory")
+            }
         }
         for path in [socket, state, kernel, initfs] {
             guard path.hasPrefix("/") else { throw ValidationError("paths must be absolute") }
@@ -48,6 +69,12 @@ struct SuccessboxApple: AsyncParsableCommand {
                 let path = URL(fileURLWithPath: runtimeDirectory).appendingPathComponent(name).path
                 guard FileManager.default.isExecutableFile(atPath: path) else {
                     throw ValidationError("runtime executable is missing or not executable: \(path)")
+                }
+            }
+            if hostHome != nil {
+                let helper = URL(fileURLWithPath: runtimeDirectory).appendingPathComponent("worktrees").path
+                guard FileManager.default.isExecutableFile(atPath: helper) else {
+                    throw ValidationError("--host-home requires the worktrees executable in --runtime-directory")
                 }
             }
             let root = URL(fileURLWithPath: state)
@@ -86,7 +113,8 @@ struct SuccessboxApple: AsyncParsableCommand {
                 let filesystem = try EXT4.Formatter(.init(upper.path), minDiskSize: 4 * 1024 * 1024 * 1024)
                 try filesystem.close()
                 var config = LinuxContainer.Configuration()
-                if #available(macOS 26, *) {
+                config.memoryInBytes = runtimeMemoryMib * 1024 * 1024
+                if network == "slirp4netns" {
                     vmnet = try VmnetNetwork()
                     if let interface = try vmnet!.createInterface(id) {
                         config.interfaces = [interface]
@@ -104,9 +132,23 @@ struct SuccessboxApple: AsyncParsableCommand {
                     """, "successbox-linux", "/opt/successbox-runtime/successbox-gvisor",
                     "--socket", "/run/successbox/control.sock", "--state", "/var/lib/successbox",
                     "--runsc", "/opt/successbox-runtime/runsc", "--rdp-port", String(rdpPort)]
+                config.process.arguments += ["--network", network, "--slirp4netns", slirp4netns]
+                if let hostHome {
+                    let backendState = root.appendingPathComponent("gvisor").path
+                    let results = URL(fileURLWithPath: backendState).appendingPathComponent("results").path
+                    try FileManager.default.createDirectory(atPath: results, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o711])
+                    // Only results persist on the host. Runtime sockets and tmpfs
+                    // mount points remain on the VM filesystem, outside this share.
+                    config.mounts.append(.share(source: results, destination: results))
+                    // The trusted helper needs the source Git metadata to register
+                    // worktrees. Guest access uses the Linux backend's tmpfs binds.
+                    config.mounts.append(.share(source: hostHome, destination: hostHome))
+                    config.process.arguments += ["--state", backendState,
+                        "--worktrees", "/opt/successbox-runtime/worktrees"]
+                }
                 config.process.stdout = ProcessOutput(buffer: output, stderr: false)
                 config.process.stderr = ProcessOutput(buffer: output, stderr: true)
-                let extra: [CapabilityName] = [.sysAdmin, .sysResource]
+                let extra: [CapabilityName] = network == "slirp4netns" ? [.sysAdmin, .sysResource, .netAdmin] : [.sysAdmin, .sysResource]
                 config.process.capabilities.bounding += extra
                 config.process.capabilities.effective += extra
                 config.process.capabilities.permitted += extra
