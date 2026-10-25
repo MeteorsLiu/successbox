@@ -18,21 +18,35 @@ jobs:
         runner: [ubuntu-latest, ubuntu-24.04-arm]
     defaults:
       run:
-        working-directory: experimental/platform
+        working-directory: runtime
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: experimental/platform/go.mod
-          cache-dependency-path: experimental/platform/go.sum
+          go-version-file: runtime/go.mod
+          cache-dependency-path: runtime/go.sum
       - name: Unit tests
-        run: go test -race ./internal/observe
-      - name: Build runtime and integration probes
+        run: go test -race ./internal/platform ./cmd/worktrees
+      - name: Build runtime and integration tests
         env:
           CGO_ENABLED: "0"
         run: |
           go build ./cmd/...
           go build -tags successbox_mmap_probe ./cmd/...
-          go build ./testdata/sandboxexec ./testdata/memory ./testdata/memory-guest
+          go build ./testdata/sandboxexec ./testdata/memory ./testdata/memory-guest ./testdata/worktrees
+      - name: Run lazy worktrees on the native Linux host
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          binary_dir="$RUNNER_TEMP/worktrees-bin"
+          mkdir -p "$binary_dir/gvisor-bin"
+          go build -o "$binary_dir/runsc" ./cmd/runsc
+          go build -o "$binary_dir/gvisor-bin/gvisor_sentry" ./cmd/sentry
+          go build -o "$binary_dir/worktrees" ./cmd/worktrees
+          go build -o "$binary_dir/worktree-probe" ./testdata/worktrees
+          sudo "$binary_dir/worktree-probe" "$RUNNER_TEMP/worktree-probe" "$binary_dir/worktrees" "$binary_dir/runsc"
+          user_dir="$(mktemp -d /tmp/successbox-worktree-user.XXXXXX)"
+          chmod 755 "$user_dir"
+          sudo env SUCCESSBOX_TEST_UID=1000 "$binary_dir/worktree-probe" "$user_dir" "$binary_dir/worktrees" "$binary_dir/runsc"

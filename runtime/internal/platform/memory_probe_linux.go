@@ -1,6 +1,6 @@
 //go:build linux && (amd64 || arm64) && successbox_mmap_probe
 
-package observe
+package platform
 
 import (
 	"bytes"
@@ -50,7 +50,7 @@ func inspectMemoryProbe(m *syscallMemory, ac *arch.Context64) error {
 			return fmt.Errorf("mapping changes are not guest-visible: %v", err)
 		}
 		args[1].Value = uintptr(address)
-		setProbeArgs(ac, args)
+		setSyscallArgs(ac, args)
 		log.Debugf("successbox-mmap: longer pathname replacement")
 	case unix.SYS_WRITEV:
 		if args[2].Uint64() != 1 {
@@ -97,7 +97,7 @@ func inspectMemoryProbe(m *syscallMemory, ac *arch.Context64) error {
 		binary.NativeEndian.PutUint64(vector[:8], uint64(address))
 		binary.NativeEndian.PutUint64(vector[8:], uint64(len(data)))
 		args[1].Value = uintptr(vectorAddress)
-		setProbeArgs(ac, args)
+		setSyscallArgs(ac, args)
 	case unix.SYS_GETPID:
 		var result uint64
 		switch args[0].Uint64() {
@@ -158,7 +158,7 @@ func inspectMemoryProbe(m *syscallMemory, ac *arch.Context64) error {
 			return err
 		}
 		args[0].Value = uintptr(address)
-		setProbeArgs(ac, args)
+		setSyscallArgs(ac, args)
 		log.Debugf("successbox-mmap: restartable sleep input")
 	case unix.SYS_EXECVE:
 		name, err := m.task.CopyInString(args[0].Pointer(), 32)
@@ -170,7 +170,7 @@ func inspectMemoryProbe(m *syscallMemory, ac *arch.Context64) error {
 			return err
 		}
 		args[0].Value = uintptr(address)
-		setProbeArgs(ac, args)
+		setSyscallArgs(ac, args)
 		log.Debugf("successbox-mmap: execve pathname copy")
 	}
 	return nil

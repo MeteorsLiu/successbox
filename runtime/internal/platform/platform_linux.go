@@ -1,9 +1,9 @@
 //go:build linux && (amd64 || arm64)
 
-// Package observe registers a systrap wrapper for the syscall interception probe.
+// Package platform registers the Successbox syscall interceptor over systrap.
 // Import it into both the runsc launcher and the Sentry executable: registration
 // only affects the importing process, not the child executable it launches.
-package observe
+package platform
 
 import (
 	"errors"
@@ -18,6 +18,7 @@ import (
 	"gvisor.dev/gvisor/pkg/sentry/kernel"
 	"gvisor.dev/gvisor/pkg/sentry/platform"
 	_ "gvisor.dev/gvisor/pkg/sentry/platform/systrap"
+	"gvisor.dev/gvisor/pkg/unet"
 )
 
 // Set only during package initialization. The default observer does not allocate
@@ -37,19 +38,33 @@ type constructor struct {
 }
 
 func (c *constructor) New(opts platform.Options) (platform.Platform, error) {
-	if inspectSyscall != nil {
+	hasDevice := opts.DeviceFile != nil && opts.DeviceFile.FD() >= 0
+	if inspectSyscall != nil || hasDevice {
 		installSyscallMemory()
+	}
+	var remote *remoteInspector
+	if hasDevice {
+		socket, err := unet.NewSocket(opts.DeviceFile.Release())
+		if err != nil {
+			return nil, err
+		}
+		remote = &remoteInspector{socket: socket}
+		opts.DeviceFile = nil
 	}
 	base, err := c.Constructor.New(opts)
 	if err != nil {
+		if remote != nil {
+			remote.socket.Close()
+		}
 		return nil, err
 	}
 	log.Infof("successbox-platform: observer enabled in Sentry")
-	return &observedPlatform{Platform: base}, nil
+	return &observedPlatform{Platform: base, remote: remote}, nil
 }
 
 type observedPlatform struct {
 	platform.Platform
+	remote      *remoteInspector
 	nextContext atomic.Uint64
 }
 
@@ -58,6 +73,7 @@ func (p *observedPlatform) NewContext(ctx context.Context) platform.Context {
 		Context: p.Platform.NewContext(ctx),
 		id:      p.nextContext.Add(1),
 		task:    kernel.TaskFromContext(ctx),
+		remote:  p.remote,
 	}
 }
 
@@ -67,6 +83,7 @@ type observedContext struct {
 	syscalls uint64
 	unames   uint64
 	task     *kernel.Task
+	remote   *remoteInspector
 }
 
 func (c *observedContext) Switch(ctx context.Context, mm platform.MemoryManager, ac *arch.Context64, cpu int32) (*linux.SignalInfo, hostarch.AccessType, error) {
@@ -79,15 +96,20 @@ func (c *observedContext) Switch(ctx context.Context, mm platform.MemoryManager,
 			c.unames++
 			log.Debugf("successbox-platform: context=%d observed uname", c.id)
 		}
-		if inspectSyscall != nil {
+		if inspectSyscall != nil || c.remote != nil {
 			ac.SyscallSaveOrig()
 			m := &syscallMemory{active: true, task: c.task, mm: c.task.MemoryManager(), ctx: c.task.Kernel().SupervisorContext()}
-			inspectionErr := inspectSyscall(m, ac)
+			var inspectionErr error
+			if c.remote != nil {
+				inspectionErr = c.remote.inspect(m, ac, c.syscalls == 1)
+			} else {
+				inspectionErr = inspectSyscall(m, ac)
+			}
 			m.active = false
 			if inspectionErr != nil {
 				return nil, hostarch.NoAccess, errors.Join(inspectionErr, m.release())
 			}
-			if len(m.regions) != 0 {
+			if len(m.regions) != 0 || m.result != nil {
 				memoryCalls.Lock()
 				memoryCalls.pending[c.task] = m
 				memoryCalls.live[m] = struct{}{}

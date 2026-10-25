@@ -153,7 +153,7 @@ private actor Sandboxes {
             for (index, mount) in request.mounts.enumerated() {
                 var source = mount.source
                 if !mount.readOnly {
-                    // Keep writes private, as runsc's overlay does. This prototype
+                    // Keep writes private, as runsc's overlay does. This backend
                     // snapshots writable shares; it does not write back into the host.
                     let copy = directory.appendingPathComponent("mount-\(index)")
                     try FileManager.default.copyItem(atPath: source, toPath: copy.path)

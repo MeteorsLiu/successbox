@@ -1,6 +1,6 @@
 //go:build linux && (amd64 || arm64)
 
-package observe
+package platform
 
 import (
 	"math"
