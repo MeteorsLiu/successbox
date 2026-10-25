@@ -5,19 +5,25 @@ output=$(realpath -m "$1")
 test ! -e "$output"
 mkdir -p "$output"
 stage=$(mktemp -d)
-trap 'sudo rm -rf "$stage"' EXIT
+trap 'if mountpoint -q "$stage/rootfs/proc"; then sudo umount "$stage/rootfs/proc" || exit 1; fi; sudo rm -rf "$stage"' EXIT
 sudo debootstrap --variant=minbase bookworm "$stage/rootfs" https://deb.debian.org/debian
 printf '#!/bin/sh\nexit 101\n' | sudo tee "$stage/rootfs/usr/sbin/policy-rc.d" >/dev/null
 sudo chmod 755 "$stage/rootfs/usr/sbin/policy-rc.d"
 sudo cp /etc/resolv.conf "$stage/rootfs/etc/resolv.conf"
 sudo chroot "$stage/rootfs" /usr/bin/env DEBIAN_FRONTEND=noninteractive apt-get update
-sudo chroot "$stage/rootfs" /usr/bin/env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends xrdp xorgxrdp openbox xterm dbus-x11 dbus procps ca-certificates curl git python3 openssl slirp4netns iproute2 util-linux nodejs npm fonts-dejavu-core
+sudo chroot "$stage/rootfs" /usr/bin/env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends xrdp xorgxrdp openbox xterm dbus-x11 dbus procps ca-certificates curl git python3 openssl slirp4netns iproute2 util-linux fonts-dejavu-core
 curl --fail --location --retry 3 https://persistent.oaistatic.com/codex-app-prod/linux/deb/latest/chatgpt_arm64.deb -o "$stage/chatgpt.deb"
 printf '68de1ec44066871e4177ba1ca793ebee6ba238397f13c794e45b14941c1261fb  %s\n' "$stage/chatgpt.deb" | sha256sum -c -
 printf '68de1ec44066871e4177ba1ca793ebee6ba238397f13c794e45b14941c1261fb  chatgpt_arm64.deb\n' > "$output/chatgpt-download.sha256"
 sudo cp "$stage/chatgpt.deb" "$stage/rootfs/tmp/chatgpt.deb"
 sudo chroot "$stage/rootfs" /usr/bin/env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends /tmp/chatgpt.deb
-sudo chroot "$stage/rootfs" npm install -g @anthropic-ai/claude-code@2.1.310
+curl --fail --location --retry 3 https://nodejs.org/dist/v24.22.1/node-v24.22.1-linux-arm64.tar.xz -o "$stage/node-v24.22.1-linux-arm64.tar.xz"
+curl --fail --location --retry 3 https://nodejs.org/dist/v24.22.1/SHASUMS256.txt -o "$stage/node-checksums.txt"
+(cd "$stage" && grep ' node-v24.22.1-linux-arm64.tar.xz$' node-checksums.txt | sha256sum -c -)
+sudo tar -xJf "$stage/node-v24.22.1-linux-arm64.tar.xz" --strip-components=1 -C "$stage/rootfs/usr/local"
+sudo mount -t proc proc "$stage/rootfs/proc"
+sudo chroot "$stage/rootfs" /usr/local/bin/npm install -g @anthropic-ai/claude-code@2.1.310
+sudo umount "$stage/rootfs/proc"
 sudo chroot "$stage/rootfs" dpkg-query -W -f='${Package} ${Version}\n' > "$output/packages.txt"
 sudo chroot "$stage/rootfs" apt-get clean
 sudo rm -f "$stage/rootfs/tmp/chatgpt.deb" "$stage/rootfs/etc/machine-id"

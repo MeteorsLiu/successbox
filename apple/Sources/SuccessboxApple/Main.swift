@@ -137,8 +137,13 @@ struct SuccessboxApple: AsyncParsableCommand {
                     let backendState = root.appendingPathComponent("gvisor").path
                     let results = URL(fileURLWithPath: backendState).appendingPathComponent("results").path
                     try FileManager.default.createDirectory(atPath: results, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o711])
-                    // Only results persist on the host. Runtime sockets and tmpfs
-                    // mount points remain on the VM filesystem, outside this share.
+                    // A packaged app stores state below the shared HOME. Keep
+                    // sockets and temporary mounts on a native guest filesystem,
+                    // while preserving the same result paths for Git publication.
+                    if backendState.hasPrefix(hostHome + "/") {
+                        config.mounts.append(.any(type: "tmpfs", source: "tmpfs",
+                            destination: backendState, options: ["mode=711"]))
+                    }
                     config.mounts.append(.share(source: results, destination: results))
                     // The trusted helper needs the source Git metadata to register
                     // worktrees. Guest access uses the Linux backend's tmpfs binds.
