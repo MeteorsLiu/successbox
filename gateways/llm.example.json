@@ -5,6 +5,7 @@
   "access": {"api-keys": ["REPLACE_WITH_LLM_GATEWAY_KEY"]},
   "oauth": {"auth-dir": "./oauth"},
   "observability": {"logs": {"request-log": false, "debug": false}},
+  "plugins": {"enabled": true, "dir": "./plugins", "configs": {"successbox": {"enabled": true, "bindings": {"REPLACE_WITH_SANDBOX_TOKEN": {"claude": "REPLACE_WITH_CLAUDE_BASE_URL#0", "codex": "REPLACE_WITH_CODEX_BASE_URL#0"}}}}},
   "api-keys": {
     "claude": [{"name": "claude", "keys": [{"api-key": "REPLACE_WITH_ANTHROPIC_KEY"}]}],
     "codex": [{"name": "codex", "keys": [{"api-key": "REPLACE_WITH_CODEX_KEY"}]}]

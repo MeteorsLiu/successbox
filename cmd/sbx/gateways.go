@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"syscall"
 	"time"
 )
@@ -48,6 +49,13 @@ func gateways(ctx context.Context, args []string, output io.Writer) error {
 			Host string
 			Port int
 		}
+		Plugins struct {
+			Enabled bool
+			Dir     string
+			Configs map[string]struct {
+				Enabled bool
+			}
+		}
 	}
 	if err := json.Unmarshal(data, &llm); err != nil {
 		return errors.New("LLM config must be a JSON object accepted by CLIProxyAPI")
@@ -58,6 +66,29 @@ func gateways(ctx context.Context, args []string, output io.Writer) error {
 	}
 	if llm.Server.Port == int(*mcpPort) {
 		return errors.New("LLM and MCP gateways require different ports")
+	}
+	binding, configured := llm.Plugins.Configs["successbox"]
+	// CLIProxyAPI falls back to ordinary scheduling when the binding plugin is
+	// disabled or absent. Never start a gateway that could route a valid token
+	// through that fallback.
+	if !configured || !llm.Plugins.Enabled || !binding.Enabled {
+		return errors.New("successbox token binding plugin must be configured and enabled")
+	}
+	pluginDir := llm.Plugins.Dir
+	if pluginDir == "" {
+		pluginDir = "plugins"
+	}
+	if !filepath.IsAbs(pluginDir) {
+		pluginDir = filepath.Join(filepath.Dir(llmPath), pluginDir)
+	}
+	extension := ".so"
+	if runtime.GOOS == "darwin" {
+		extension = ".dylib"
+	}
+	pluginPath := filepath.Join(pluginDir, runtime.GOOS, runtime.GOARCH, "successbox"+extension)
+	info, err := os.Stat(pluginPath)
+	if err != nil || !info.Mode().IsRegular() {
+		return fmt.Errorf("successbox token binding plugin must be a regular file at %s", pluginPath)
 	}
 	data, err = os.ReadFile(filepath.Join(mcpPath, "config.json"))
 	if err != nil {
