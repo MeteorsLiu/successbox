@@ -62,3 +62,11 @@ python3 testdata/gateways/run.py \
 ```
 
 The test launches both actual gateways and a local upstream fixture, using synthetic credentials only. It verifies Codex Responses and Claude Messages in JSON and SSE modes, authenticated remote HTTP MCP, stdio MCP through Bifrost, tool discovery/calls, rejection of incorrect client credentials and listener shutdown. It creates isolated state and local synthetic model catalogs for each run, so protocol checks need no external model/MCP services or catalog downloads. Native CI runs on Linux amd64/arm64 and macOS arm64. Lifecycle unit tests also cover cancellation, child failure and partial startup.
+
+## MCP instructions
+
+The Successbox plugin injects sensitive-field and MCP installation instructions by default for each authenticated bound caller. It does not inspect tool names or require an MCP tool to appear in the request. Claude Messages receives system instructions, standard Responses receives instructions, and Responses Lite receives a developer message. Code Mode and requests without tools receive the same policy. Existing tools, history and caller instructions are preserved; retries do not duplicate the marked policy block.
+
+The policy explains `$PRIVACY_PROTECT_<field_name>` and directs installation through `request_mcp_install`. Actual MCP registration, credential resolution and client catalog refresh are provided by the subsequent gateway-service change; these instructions do not create callable tools or perform content redaction.
+
+The native fixture checks twelve JSON/streaming cases covering Messages, Responses, Responses Lite, Code Mode, and requests without tools.
