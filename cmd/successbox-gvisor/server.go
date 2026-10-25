@@ -155,7 +155,10 @@ func (s *server) Create(ctx context.Context, request *pb.CreateRequest) (*pb.San
 	}
 	if s.worktreeHelper != "" {
 		results := filepath.Join(s.root, "results", id)
-		if err := os.MkdirAll(results, 0711); err != nil {
+		// Credential workers open this per-sandbox parent with os.OpenRoot,
+		// which needs read permission as well as traversal. Each private child
+		// remains 0700 and belongs to the credentials that prepared it.
+		if err := os.MkdirAll(results, 0755); err != nil {
 			return nil, status.Errorf(codes.Internal, "prepare results: %v", err)
 		}
 		spec.Mounts = append(spec.Mounts, specs.Mount{Source: results, Destination: "/run/successbox-results", Type: "bind", Options: []string{"rbind", "rprivate", "nosuid", "nodev"}})
