@@ -102,7 +102,7 @@ Apple defaults to 2 vCPUs and a 1 GiB container memory limit, with the SDK's 128
 
 Pull requests and pushes to `main` run Go race tests and builds on Linux amd64 (`ubuntu-latest`), Linux arm64 (`ubuntu-24.04-arm`), and macOS arm64 (`macos-26`). A separate `macos-26` job builds the Swift backend and generated protocol bindings, checks that `Package.resolved` stays unchanged, signs the binary with the virtualization entitlement, verifies its signature, and runs `--help`.
 
-The Go transport tests use in-process gRPC fixtures and a controlled runsc stand-in. CI does not boot a guest or perform desktop login; the runtime checks below were performed separately with compatible kernel, initfs, rootfs, and RDP client assets.
+The Go transport tests use in-process gRPC fixtures and a controlled runsc stand-in. The main Go transport tests do not boot a guest or perform desktop login. The separate Platform workflow boots Linux guests for worktree checks; desktop validation below was performed separately with compatible kernel, initfs, rootfs, and RDP client assets.
 
 ## Verification scope
 
@@ -117,3 +117,29 @@ Both arm64 backends passed TTY checks for initial size, resize, interactive inpu
 The minimal test image still reports missing Openbox menu/PyXDG autostart components. These checks launch the terminal explicitly through Exec; desktop menus and autostart are not covered.
 
 Successbox currently covers sandbox control and RDP transport. It does not yet integrate the frontend, MCP gateway, or LLM gateway.
+
+## Lazy worktrees on Linux
+
+Build the custom runtime pair and helper from `runtime`, then enable it on the existing Linux service:
+
+```sh
+go build -o bin/successbox-gvisor ./cmd/successbox-gvisor
+CGO_ENABLED=0 go -C runtime build -o ../bin/worktree-runtime/runsc ./cmd/runsc
+CGO_ENABLED=0 go -C runtime build -o ../bin/worktree-runtime/gvisor-bin/gvisor_sentry ./cmd/sentry
+CGO_ENABLED=0 go -C runtime build -o ../bin/worktree-runtime/worktrees ./cmd/worktrees
+sudo ./bin/successbox-gvisor \
+  --socket /var/lib/successbox/control.sock \
+  --state /var/lib/successbox \
+  --runsc "$(pwd)/bin/worktree-runtime/runsc" \
+  --worktrees "$(pwd)/bin/worktree-runtime/worktrees"
+```
+
+Use the normal Create request with `rootfs` set to `/`, your working directory and the intended Linux UID/GID. This shares the Linux system as the sandbox's lower filesystem; runsc's overlay keeps ordinary writes private. There is no project-directory allowlist and no dedicated agent image. The `--worktrees` flag is optional; the existing backend behavior is unchanged when it is absent. The helper currently requires a rootful backend, but guest applications and repository workers can run as the user's UID/GID.
+
+Accessing an existing Git repository creates one private copy and redirects pathname syscalls to it. The initial working directory is handled too. Create starts the helper, and Close first stops and deletes the guest, then publishes the private directories as detached worktrees in their original repositories. `git -C /original/project worktree list` shows the retained directories under `STATE/results/SANDBOX_ID/repo-*/worktree`. The original working files and branch are not overwritten. The per-sandbox `repositories.json` records the mapping; publication failures retain the files and make Close return an error.
+
+The backend uses a private mount namespace, a disposable root overlay and private overlays for writable user binds. Only the current sandbox’s result directory is mounted writable at `/run/successbox-results`. Runtime state is hidden with guest tmpfs mounts, including paths exposed through bind aliases. It contains control sockets, manifests and other sandboxes' private results and must not be served through the host-root lower layer. The public Create/Exec/Display/Close protocol is unchanged.
+
+Reflinks are used where supported; otherwise the first access copies that repository's files. This does not snapshot the entire filesystem, but it is not per-file lazy CoW. Separate retention of non-Git files is not implemented in this step: those writes remain in the disposable overlay. See [runtime boundaries](runtime/README.md#worktree-policy) for Git and namespace limitations.
+
+The native Platform CI now boots this custom runtime on Linux amd64 and arm64. It tests the low-level worktree probe and the existing RPC lifecycle with root and UID 1000 guests. `testdata/gvisor-worktrees.sh` is the reproducible service test; it accepts paths to `sbx`, the service, runsc, the helper and a new fixture directory. These checks run directly on Linux, without Docker.

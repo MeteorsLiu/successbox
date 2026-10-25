@@ -37,6 +37,7 @@ type repository struct {
 }
 type manager struct {
 	root, directory string
+	guestDirectory  string
 	mounts          []specs.Mount
 	mu              sync.Mutex
 	repositories    map[string]*repository
@@ -113,6 +114,13 @@ func main() {
 		root = ""
 	}
 	m := &manager{root: root, directory: *directory, mounts: spec.Mounts, repositories: make(map[string]*repository), mappings: make(map[string]string)}
+	m.guestDirectory = m.directory
+	for _, mount := range spec.Mounts {
+		if mount.Type == "bind" && mount.Source == m.directory {
+			m.guestDirectory = mount.Destination
+			break
+		}
+	}
 	if *readyFD >= 0 {
 		f := os.NewFile(uintptr(*readyFD), "ready")
 		if _, err := f.Write([]byte{1}); err != nil {
@@ -164,7 +172,7 @@ func (m *manager) prepare(req request) (string, error) {
 		return "", errors.New("invalid guest path")
 	}
 	guest := filepath.Clean(req.Path)
-	if within(guest, m.directory) {
+	if m.guestDirectory != "" && within(guest, m.guestDirectory) {
 		return guest, nil
 	}
 	sourceRoot, guestRoot := m.root, "/"
@@ -259,6 +267,10 @@ func (m *manager) prepare(req request) (string, error) {
 	if m.mappings == nil {
 		m.mappings = make(map[string]string)
 	}
-	m.mappings[target] = repo.Directory
-	return repo.Directory + strings.TrimPrefix(guest, target), nil
+	private := repo.Directory
+	if m.guestDirectory != "" {
+		private = m.guestDirectory + strings.TrimPrefix(repo.Directory, m.directory)
+	}
+	m.mappings[target] = private
+	return private + strings.TrimPrefix(guest, target), nil
 }
