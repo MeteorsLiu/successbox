@@ -74,6 +74,11 @@ class Fixture(BaseHTTPRequestHandler):
             self.reply(200, json.dumps({"jsonrpc": "2.0", "id": body["id"], "result": result}).encode())
             return
         seen_llm.append(self.path)
+        prompt = json.dumps(body.get("system", body.get("instructions", "")))
+        if isinstance(body.get("input"), list):
+            prompt += json.dumps([item for item in body["input"] if item.get("type") == "message" and item.get("role") == "developer"])
+        assert "$PRIVACY_PROTECT_api_key" in prompt, "gateway did not inject the MCP placeholder rules"
+        assert "mcp_id" in prompt and "request_mcp_install" in prompt, "gateway omitted installation instructions"
         if self.path.split("?")[0].endswith("/messages"):
             result = {"id": "msg_fixture", "type": "message", "role": "assistant", "model": body["model"], "content": [{"type": "text", "text": "fixture reply"}], "stop_reason": "end_turn", "stop_sequence": None, "usage": {"input_tokens": 1, "output_tokens": 2}}
             if not body.get("stream"):
@@ -170,13 +175,26 @@ with tempfile.TemporaryDirectory(prefix="successbox-gateways-") as directory:
                             raise AssertionError("gateway startup timed out")
                         time.sleep(0.05)
             llm_base = "http://127.0.0.1:" + str(llm_port)
-            for provider, endpoint in [("codex", "/v1/responses"), ("claude", "/v1/messages")]:
+            for provider, shape, endpoint in [("codex", "standard", "/v1/responses"), ("codex", "lite", "/v1/responses"), ("codex", "code-mode", "/v1/responses"), ("codex", "no-tools", "/v1/responses"), ("claude", "standard", "/v1/messages"), ("claude", "no-tools", "/v1/messages")]:
                 for stream in [False, True]:
                     body = {"model": "successbox-fixture-" + provider, "stream": stream}
+                    tool = {"name": "mcp__successbox__request_mcp_install", "description": "Request an MCP installation"}
                     if provider == "codex":
                         body["input"] = "fixture request"
+                        body["tools"] = [{**tool, "type": "function", "parameters": {"type": "object", "properties": {}}}]
+                        if shape in ("lite", "code-mode"):
+                            body["input"] = [
+                                {"type": "additional_tools", "role": "developer", "tools": [{"type": "namespace", "name": "mcp__successbox", "tools": [{"type": "function", "name": "request_mcp_install", "parameters": {"type": "object", "properties": {}}}]}]},
+                                {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "fixture request"}]},
+                            ]
+                            if shape == "code-mode":
+                                body["input"][0]["tools"] = [{"type": "namespace", "name": "functions", "tools": [{"type": "custom", "name": "exec", "description": "Execute JavaScript against the client tool runtime"}]}]
+                            del body["tools"]
                     else:
                         body.update(messages=[{"role": "user", "content": "fixture request"}], max_tokens=32)
+                        body["tools"] = [{**tool, "input_schema": {"type": "object", "properties": {}}}]
+                    if shape == "no-tools":
+                        del body["tools"]
                     request = urllib.request.Request(llm_base + endpoint, data=json.dumps(body).encode(), headers={"Authorization": "Bearer " + client_key, "Content-Type": "application/json"})
                     with urllib.request.urlopen(request, timeout=15) as response:
                         result = response.read()
@@ -184,7 +202,7 @@ with tempfile.TemporaryDirectory(prefix="successbox-gateways-") as directory:
                     assert upstream_key.encode() not in result
                     if stream:
                         assert (b"response.completed" if provider == "codex" else b"message_stop") in result
-                    print(provider, "SSE" if stream else "JSON", "PASS", flush=True)
+                    print(provider, shape, "SSE" if stream else "JSON", "PASS", flush=True)
             try:
                 urllib.request.urlopen(urllib.request.Request(llm_base + "/v1/models", headers={"Authorization": "Bearer incorrect"}), timeout=3)
                 raise AssertionError("LLM accepted incorrect client credential")
@@ -233,7 +251,7 @@ with tempfile.TemporaryDirectory(prefix="successbox-gateways-") as directory:
             except urllib.error.HTTPError as error:
                 assert error.code in (401, 403)
             assert len(seen_mcp) == before, "invalid credential reached upstream MCP"
-            assert "tools/call" in seen_mcp and len(seen_llm) == 4
+            assert "tools/call" in seen_mcp and len(seen_llm) == 12
             print("MCP initialize/list/call and authentication separation PASS", flush=True)
             process.send_signal(signal.SIGTERM)
             assert process.wait(timeout=15) == 0

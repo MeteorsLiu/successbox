@@ -108,6 +108,169 @@ func TestPluginProtocol(t *testing.T) {
 			t.Fatalf("bound accounts must remain selectable across priorities: %s", data)
 		}
 	}
+	t.Run("MCP policy is injected by default", func(t *testing.T) {
+		config, _ := json.Marshal(map[string][]byte{"config_yaml": []byte("bindings:\n  token-a: {claude: a, codex: a}\n")})
+		if err := s.configure(config); err != nil {
+			t.Fatal(err)
+		}
+		sum := sha256.Sum256([]byte("cli-proxy-api:caller-scope:v1\x00token-a"))
+		scope := hex.EncodeToString(sum[:])
+		for _, format := range []string{"claude", "openai-response"} {
+			for _, stream := range []bool{false, true} {
+				for _, system := range []any{"original instructions", []any{map[string]any{"type": "text", "text": "original instructions", "cache_control": map[string]string{"type": "ephemeral"}}}} {
+					if format == "openai-response" {
+						if _, ok := system.(string); !ok {
+							continue
+						}
+					}
+					field := "instructions"
+					if format == "claude" {
+						field = "system"
+					}
+					body := map[string]any{"model": "fixture", "stream": stream, field: system, "tools": []any{map[string]any{"name": "mcp__successbox__request_mcp_install", "type": "function", "parameters": map[string]string{"type": "object"}}}, "input": []any{map[string]any{"role": "user", "content": "hello"}}}
+					encoded, _ := json.Marshal(body)
+					raw, _ := json.Marshal(map[string]any{"SourceFormat": format, "Body": encoded, "Metadata": map[string]string{"caller_scope": scope}})
+					result, err := s.call("request.intercept_before", raw)
+					if err != nil {
+						t.Fatal(err)
+					}
+					var response struct{ Result struct{ Body []byte } }
+					if err := json.Unmarshal(result, &response); err != nil {
+						t.Fatal(err)
+					}
+					var patched map[string]json.RawMessage
+					if err := json.Unmarshal(response.Result.Body, &patched); err != nil {
+						t.Fatal(err)
+					}
+					if !strings.Contains(string(patched[field]), "$PRIVACY_PROTECT_api_key") || !strings.Contains(string(patched[field]), "original instructions") {
+						t.Fatal("instructions not preserved and extended")
+					}
+					var original map[string]json.RawMessage
+					json.Unmarshal(encoded, &original)
+					for _, key := range []string{"tools", "input", "model", "stream"} {
+						if string(original[key]) != string(patched[key]) {
+							t.Fatalf("changed %s", key)
+						}
+					}
+					raw, _ = json.Marshal(map[string]any{"SourceFormat": format, "Body": response.Result.Body, "Metadata": map[string]string{"caller_scope": scope}})
+					result, err = s.call("request.intercept_before", raw)
+					if err != nil {
+						t.Fatal(err)
+					}
+					response.Result.Body = nil
+					json.Unmarshal(result, &response)
+					if len(response.Result.Body) != 0 {
+						t.Fatal("instructions appended twice")
+					}
+					delete(body, "tools")
+					encoded, _ = json.Marshal(body)
+					raw, _ = json.Marshal(map[string]any{"SourceFormat": format, "Body": encoded, "Metadata": map[string]string{"caller_scope": scope}})
+					result, err = s.call("request.intercept_before", raw)
+					if err != nil {
+						t.Fatal(err)
+					}
+					response.Result.Body = nil
+					json.Unmarshal(result, &response)
+					if !strings.Contains(string(response.Result.Body), "$PRIVACY_PROTECT_api_key") || !strings.Contains(string(response.Result.Body), "request_mcp_install") {
+						t.Fatal("request without tools skipped the default policy")
+					}
+				}
+			}
+		}
+	})
+
+	t.Run("Responses Lite declares tools inside input", func(t *testing.T) {
+		configuration, _ := json.Marshal(map[string][]byte{"config_yaml": []byte("bindings:\n  lite-client: {codex: authorized.json}\n")})
+		if err := s.configure(configuration); err != nil {
+			t.Fatal(err)
+		}
+		sum := sha256.Sum256([]byte("cli-proxy-api:caller-scope:v1\x00lite-client"))
+		// Codex 0.163.0 build_responses_request emits this shape for
+		// use_responses_lite models; there is no top-level tools property.
+		body := []byte(`{"model":"fixture","stream":true,"input":[{"type":"additional_tools","role":"developer","tools":[{"type":"namespace","name":"mcp__successbox","tools":[{"type":"function","name":"request_mcp_install","parameters":{"type":"object"}}]}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"Install project tools"}]}]}`)
+		raw, _ := json.Marshal(map[string]any{"SourceFormat": "openai-response", "Body": body, "Metadata": map[string]string{"caller_scope": hex.EncodeToString(sum[:])}})
+		result, err := s.call("request.intercept_before", raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var response struct{ Result struct{ Body []byte } }
+		if err := json.Unmarshal(result, &response); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(response.Result.Body), "$PRIVACY_PROTECT_api_key") {
+			t.Fatal("Responses Lite request with a registered installation tool skipped the privacy policy")
+		}
+		var before, after map[string]json.RawMessage
+		json.Unmarshal(body, &before)
+		json.Unmarshal(response.Result.Body, &after)
+		var original, patched []json.RawMessage
+		json.Unmarshal(before["input"], &original)
+		json.Unmarshal(after["input"], &patched)
+		if len(patched) != len(original)+1 || string(patched[0]) != string(original[0]) || string(patched[2]) != string(original[1]) {
+			t.Fatal("Lite injection changed the executable tools or original messages")
+		}
+		var policy struct {
+			Type, Role string
+			Content    []struct{ Type, Text string }
+		}
+		json.Unmarshal(patched[1], &policy)
+		if policy.Type != "message" || policy.Role != "developer" || len(policy.Content) != 1 || policy.Content[0].Type != "input_text" || !strings.Contains(policy.Content[0].Text, "$PRIVACY_PROTECT_api_key") {
+			t.Fatal("Lite policy is not a developer instruction message")
+		}
+		if _, exists := after["tools"]; exists {
+			t.Fatal("Lite injection created a second tool registry")
+		}
+		if _, exists := after["instructions"]; exists {
+			t.Fatal("Lite injection used top-level instructions instead of a developer message")
+		}
+		// Retrying is a no-op, including when the caller changes its tools.
+		// Tool discovery and execution remain owned by the client.
+		raw, _ = json.Marshal(map[string]any{"SourceFormat": "openai-response", "Body": response.Result.Body, "Metadata": map[string]string{"caller_scope": hex.EncodeToString(sum[:])}})
+		result, err = s.call("request.intercept_before", raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response.Result.Body = nil
+		json.Unmarshal(result, &response)
+		if len(response.Result.Body) != 0 {
+			t.Fatal("Lite retry duplicated the policy")
+		}
+		patched[0] = json.RawMessage(`{"type":"additional_tools","role":"developer","tools":[{"type":"namespace","name":"mcp__successbox","tools":[{"type":"function","name":"request_mcp_install"},{"type":"function","name":"project-search"}]}]}`)
+		after["input"], _ = json.Marshal(patched)
+		updated, _ := json.Marshal(after)
+		raw, _ = json.Marshal(map[string]any{"SourceFormat": "openai-response", "Body": updated, "Metadata": map[string]string{"caller_scope": hex.EncodeToString(sum[:])}})
+		result, err = s.call("request.intercept_before", raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		json.Unmarshal(result, &response)
+		if len(response.Result.Body) != 0 {
+			t.Fatal("changing tools changed or duplicated the default policy")
+		}
+		for _, test := range []struct {
+			name, format, caller, body string
+			wantPolicy                 bool
+		}{
+			{"unbound caller", "openai-response", "unknown", string(body), false},
+			{"user messages do not control injection", "openai-response", hex.EncodeToString(sum[:]), strings.Replace(string(body), `"role":"developer"`, `"role":"user"`, 1), true},
+			{"Claude injects without tools", "claude", hex.EncodeToString(sum[:]), `{"messages":[{"role":"user","content":"hello"}]}`, true},
+			{"Code Mode has no direct MCP tools", "openai-response", hex.EncodeToString(sum[:]), `{"input":[{"type":"additional_tools","role":"developer","tools":[{"type":"namespace","name":"functions","tools":[{"type":"custom","name":"exec"}]}]}]}`, true},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				raw, _ := json.Marshal(map[string]any{"SourceFormat": test.format, "Body": []byte(test.body), "Metadata": map[string]string{"caller_scope": test.caller}})
+				result, err := s.call("request.intercept_before", raw)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var response struct{ Result struct{ Body []byte } }
+				json.Unmarshal(result, &response)
+				if strings.Contains(string(response.Result.Body), "$PRIVACY_PROTECT_api_key") != test.wantPolicy {
+					t.Fatal("default policy did not follow the authenticated caller binding")
+				}
+			})
+		}
+	})
+
 	if _, err := s.call("scheduler.pick", []byte(`{`)); err == nil {
 		t.Fatal("malformed request succeeded")
 	}
