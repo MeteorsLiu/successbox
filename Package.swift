@@ -25,10 +25,22 @@ let package = Package(
             exclude: ["sandbox.pb.go", "sandbox_grpc.pb.go"],
             plugins: [.plugin(name: "GRPCProtobufGenerator", package: "grpc-swift-protobuf")]
         ),
+        .target(
+            name: "GatewayProtocol",
+            dependencies: [
+                .product(name: "GRPCCore", package: "grpc-swift-2"),
+                .product(name: "GRPCProtobuf", package: "grpc-swift-protobuf"),
+                .product(name: "SwiftProtobuf", package: "swift-protobuf"),
+            ],
+            path: "api/gateway/v1",
+            exclude: ["gateway.pb.go", "gateway_grpc.pb.go"],
+            plugins: [.plugin(name: "GRPCProtobufGenerator", package: "grpc-swift-protobuf")]
+        ),
         .executableTarget(
             name: "SuccessboxApple",
             dependencies: [
                 "SandboxProtocol",
+                "GatewayProtocol",
                 .product(name: "Containerization", package: "containerization"),
                 .product(name: "ContainerizationEXT4", package: "containerization"),
                 .product(name: "ContainerizationOS", package: "containerization"),

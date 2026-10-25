@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - 'cmd/sbx/**'
+      - 'api/gateway/**'
       - 'gateways/**'
       - 'testdata/gateways/**'
       - '.github/workflows/gateways.yml'
@@ -13,6 +14,7 @@ on:
     branches: [main]
     paths:
       - 'cmd/sbx/**'
+      - 'api/gateway/**'
       - 'gateways/**'
       - 'testdata/gateways/**'
       - '.github/workflows/gateways.yml'
