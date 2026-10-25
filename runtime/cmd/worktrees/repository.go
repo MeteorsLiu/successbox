@@ -440,9 +440,9 @@ func publish(repo *repository) error {
 		}
 		for _, entry := range entries {
 			name := entry.Name()
-			if name == "info" {
+			if name == "info" || name == "maintenance.lock" {
 				continue
-			} // Never import alternates or configuration.
+			} // Never import alternates, configuration or the guest's maintenance lock.
 			if !entry.IsDir() {
 				return fmt.Errorf("unexpected object database entry %q", name)
 			}
