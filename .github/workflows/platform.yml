@@ -1,0 +1,38 @@
+name: Platform
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Platform (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+    defaults:
+      run:
+        working-directory: experimental/platform
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: experimental/platform/go.mod
+          cache-dependency-path: experimental/platform/go.sum
+      - name: Unit tests
+        run: go test -race ./internal/observe
+      - name: Build runtime and integration probes
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          go build ./cmd/...
+          go build -tags successbox_mmap_probe ./cmd/...
+          go build ./testdata/sandboxexec ./testdata/memory ./testdata/memory-guest
