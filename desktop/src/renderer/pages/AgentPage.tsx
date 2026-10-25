@@ -32,11 +32,11 @@ export function AgentPage({
     const runs = state.runs.filter((run) => run.agent === agent);
     return (
       <>
-        <div className="h2">{name} 沙箱终端</div>
+        <div className="h2">{agent === 'codex' ? 'Codex Desktop' : name}</div>
         <div className="note">
-          在隔离环境中启动 {name}
-          。本轮接入终端、退出清理和按 Agent
-          加载网关环境；账号管理及改动展示尚未接入。
+          {agent === 'codex'
+            ? '在受保护的窗口中使用 Codex Desktop。关闭应用窗口后清理本次运行环境。'
+            : '在终端中使用 Claude Code，程序退出后清理本次运行环境。'}
         </div>
         <div className="card row">
           <div style={{ flex: 1 }}>
@@ -51,7 +51,11 @@ export function AgentPage({
               setBusy(null);
             }}
           >
-            {busy === 'launch' ? '正在打开…' : '在终端中打开'}
+            {busy === 'launch'
+              ? '正在打开…'
+              : agent === 'codex'
+                ? '打开 Codex Desktop'
+                : '在终端中打开'}
           </button>
         </div>
         {state.terminalMessage && <p role="status">{state.terminalMessage}</p>}

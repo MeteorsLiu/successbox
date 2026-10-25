@@ -2,7 +2,7 @@ import { app, dialog, Notification } from 'electron';
 import path from 'node:path';
 import { readFileSync, existsSync } from 'node:fs';
 import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
@@ -499,7 +499,7 @@ class GatewayBackend implements Backend {
   async launchInTerminal(agent: AgentId) {
     if (agent !== 'claude' && agent !== 'codex') throw new Error('未知 Agent');
     if (process.platform !== 'darwin' && process.platform !== 'linux')
-      throw new Error('当前仅支持 macOS 和 Linux 终端');
+      throw new Error('当前仅支持 macOS 和 Linux');
     const file =
       process.env.SUCCESSBOX_GATEWAY_CONFIG ??
       path.join(app.getPath('userData'), 'gateway.json');
@@ -509,11 +509,195 @@ class GatewayBackend implements Backend {
         socket: string;
         create: string;
         terminal: string[];
+        desktop?: {
+          viewer: string[];
+          prepare?: string[];
+          command?: string[];
+        };
         commands?: Partial<Record<AgentId, string[]>>;
         environment?: Partial<Record<AgentId, string[]>>;
+        gateways?: Partial<
+          Record<
+            AgentId,
+            {
+              url: string;
+              model: string;
+              llmToken: string;
+              mcpToken: string;
+            }
+          >
+        >;
       };
     };
     const sandbox = configuration.sandbox;
+    if (agent === 'codex' && !sandbox?.desktop)
+      throw new Error('Codex Desktop 尚未配置桌面连接，无法打开应用');
+    if (agent === 'codex' && sandbox?.desktop) {
+      if (
+        ![sandbox.client, sandbox.socket, sandbox.create].every(
+          (value) => typeof value === 'string' && path.isAbsolute(value),
+        )
+      )
+        throw new Error('请配置沙箱客户端、控制 socket 和桌面 Create 文件');
+      const desktop = sandbox.desktop;
+      for (const argv of [desktop.viewer, desktop.prepare, desktop.command]) {
+        if (
+          argv !== undefined &&
+          (!Array.isArray(argv) ||
+            !argv.length ||
+            argv.some(
+              (value) => typeof value !== 'string' || value.includes('\0'),
+            ) ||
+            !argv[0])
+        )
+          throw new Error('桌面启动命令必须是参数数组');
+      }
+      if (!desktop.viewer?.some((arg) => arg.includes('{address}')))
+        throw new Error('RDP 客户端参数需要包含 {address}');
+      const request = JSON.parse(await readFile(sandbox.create, 'utf8'));
+      if (request.desktop !== true)
+        throw new Error('桌面 Create 配置需要 desktop=true');
+      const id = randomUUID();
+      const directory = await mkdtemp(
+        path.join(tmpdir(), 'successbox-display-'),
+      );
+      const createPath = path.join(directory, 'create.json');
+      const call = promisify(execFile);
+      const prefix = ['--socket', sandbox.socket];
+      let sandboxId = '';
+      let proxy: ReturnType<typeof spawn> | undefined;
+      let viewer: ReturnType<typeof spawn> | undefined;
+      let application: ReturnType<typeof spawn> | undefined;
+      let closing: Promise<void> | undefined;
+      const close = () =>
+        (closing ??= (async () => {
+          viewer?.kill('SIGTERM');
+          proxy?.kill('SIGTERM');
+          try {
+            if (sandboxId)
+              await call(sandbox.client, [...prefix, 'close', sandboxId]);
+            this.state.runs = this.state.runs.filter((run) => run.id !== id);
+            this.state.terminalMessage = '桌面已关闭，沙箱已清理';
+            await rm(directory, { recursive: true, force: true });
+          } catch {
+            const run = this.state.runs.find((run) => run.id === id);
+            if (run) run.status = 'cleanup-failed';
+            this.state.terminalMessage = `桌面清理失败，沙箱 ${sandboxId}；请检查后端`;
+          } finally {
+            application?.kill('SIGTERM');
+            this.changed();
+            app.removeListener('before-quit', onQuit);
+          }
+        })());
+      const onQuit = (event: Electron.Event) => {
+        event.preventDefault();
+        void close().finally(() => app.quit());
+      };
+      app.on('before-quit', onQuit);
+      this.state.runs.push({
+        id,
+        agent,
+        cwd: request.workingDir ?? request.working_dir ?? '/',
+        protected: true,
+        startedAt: new Date().toLocaleString(),
+        status: 'starting',
+      });
+      this.state.terminalMessage = '正在准备 RDP 桌面';
+      this.changed();
+      try {
+        await writeFile(createPath, JSON.stringify(request), { mode: 0o600 });
+        sandboxId = (
+          await call(sandbox.client, [...prefix, 'create', createPath])
+        ).stdout.trim();
+        const run = this.state.runs.find((run) => run.id === id);
+        if (run) run.sandboxId = sandboxId;
+        if (desktop.prepare) {
+          this.state.terminalMessage = '正在准备桌面应用';
+          this.changed();
+          await call(
+            sandbox.client,
+            [
+              ...prefix,
+              'exec',
+              '--sandbox',
+              sandboxId,
+              '--',
+              ...desktop.prepare,
+            ],
+            { maxBuffer: 4 * 1024 * 1024 },
+          );
+        }
+        proxy = spawn(
+          sandbox.client,
+          [
+            ...prefix,
+            'display',
+            '--sandbox',
+            sandboxId,
+            '--listen',
+            '127.0.0.1:0',
+          ],
+          { stdio: ['ignore', 'ignore', 'pipe'] },
+        );
+        const address = await new Promise<string>((resolve, reject) => {
+          let output = '';
+          proxy!.once('error', reject);
+          proxy!.once('exit', () => reject(new Error('RDP 通道未能启动')));
+          proxy!.stderr!.on('data', (chunk: Buffer) => {
+            output = (output + chunk.toString()).slice(-8192);
+            const match = output.match(
+              /display byte-stream proxy: (127\.0\.0\.1:\d+)/,
+            );
+            if (match) resolve(match[1]);
+          });
+        });
+        if (desktop.command) {
+          application = spawn(
+            sandbox.client,
+            [
+              ...prefix,
+              'exec',
+              '--sandbox',
+              sandboxId,
+              '--',
+              ...desktop.command,
+            ],
+            { stdio: 'ignore' },
+          );
+          application.once('error', () => {
+            this.state.terminalMessage = '桌面应用启动失败';
+            this.changed();
+          });
+          application.once('exit', (code) => {
+            if (!closing && code !== 0) {
+              this.state.terminalMessage = `桌面应用退出（${code}），RDP 桌面仍保留`;
+              this.changed();
+            }
+          });
+        }
+        const [executable, ...args] = desktop.viewer.map((arg) =>
+          arg.replaceAll('{address}', address),
+        );
+        viewer = spawn(executable, args, { stdio: 'ignore' });
+        viewer.once('exit', () => {
+          void close();
+        });
+        await new Promise<void>((resolve, reject) => {
+          viewer!.once('spawn', resolve);
+          viewer!.once('error', reject);
+        });
+        if (run) run.status = 'running';
+        this.state.terminalMessage = 'RDP 客户端已打开，正在连接沙箱桌面';
+        this.changed();
+        proxy.once('exit', () => {
+          if (!closing) void close();
+        });
+      } catch {
+        await close();
+        throw new Error('桌面启动失败，请检查运行环境、RDP 客户端和后端日志');
+      }
+      return;
+    }
     if (
       !sandbox ||
       ![sandbox.client, sandbox.socket, sandbox.create].every(
@@ -526,7 +710,7 @@ class GatewayBackend implements Backend {
       throw new Error(
         '请在连接配置中填写 sandbox 的 client、socket、create 和 terminal',
       );
-    const argv = sandbox.commands?.[agent] ?? [AGENT_COMMANDS[agent]];
+    let argv = sandbox.commands?.[agent] ?? [AGENT_COMMANDS[agent]];
     if (
       !Array.isArray(argv) ||
       argv.length === 0 ||
@@ -539,6 +723,17 @@ class GatewayBackend implements Backend {
       working_dir?: string;
       env?: string[];
     };
+    if (
+      createRequest.env !== undefined &&
+      (!Array.isArray(createRequest.env) ||
+        createRequest.env.some(
+          (value) =>
+            typeof value !== 'string' ||
+            value.indexOf('=') <= 0 ||
+            value.includes('\0'),
+        ))
+    )
+      throw new Error('基础运行环境必须是 KEY=VALUE 字符串数组');
     const agentEnvironment = sandbox.environment?.[agent] ?? [];
     if (
       !Array.isArray(agentEnvironment) ||
@@ -562,6 +757,105 @@ class GatewayBackend implements Backend {
     for (const value of agentEnvironment) {
       environment.set(value.slice(0, value.indexOf('=')), value);
     }
+    const id = randomUUID();
+    const gateway = sandbox.gateways?.[agent];
+    let agentConfiguration:
+      | { directory: string; name: string; content: string }
+      | undefined;
+    if (gateway) {
+      if (
+        ![gateway.url, gateway.model, gateway.llmToken, gateway.mcpToken].every(
+          (value) =>
+            typeof value === 'string' &&
+            value.length > 0 &&
+            !value.includes('\0'),
+        )
+      )
+        throw new Error('网关配置需要 url、model、llmToken 和 mcpToken');
+      const endpoint = new URL(gateway.url);
+      if (
+        !['http:', 'https:'].includes(endpoint.protocol) ||
+        endpoint.username ||
+        endpoint.password ||
+        endpoint.search ||
+        endpoint.hash ||
+        endpoint.pathname !== '/'
+      )
+        throw new Error('网关 url 必须是无路径、无账号信息的 HTTP(S) 地址');
+      const directory = `/tmp/successbox-agent-${id}`;
+      // Only gateway client keys enter the guest. Host control credentials are
+      // never copied. Each launch gets its own config, including on macOS where
+      // host paths cannot be passed directly to the Linux VM.
+      for (const key of [
+        'OPENAI_API_KEY',
+        'OPENAI_BASE_URL',
+        'ANTHROPIC_API_KEY',
+        'ANTHROPIC_AUTH_TOKEN',
+        'ANTHROPIC_BASE_URL',
+      ])
+        environment.delete(key);
+      environment.set(
+        'SUCCESSBOX_LLM_TOKEN',
+        `SUCCESSBOX_LLM_TOKEN=${gateway.llmToken}`,
+      );
+      environment.set(
+        'SUCCESSBOX_MCP_TOKEN',
+        `SUCCESSBOX_MCP_TOKEN=${gateway.mcpToken}`,
+      );
+      const string = (value: string) => JSON.stringify(value);
+      if (agent === 'codex') {
+        environment.set('CODEX_HOME', `CODEX_HOME=${directory}`);
+        agentConfiguration = {
+          directory,
+          name: 'config.toml',
+          content: [
+            `model = ${string(gateway.model)}`,
+            'model_provider = "successbox"',
+            '[model_providers.successbox]',
+            'name = "Successbox"',
+            `base_url = ${string(endpoint.origin + '/v1')}`,
+            'env_key = "SUCCESSBOX_LLM_TOKEN"',
+            'wire_api = "responses"',
+            'requires_openai_auth = false',
+            '[mcp_servers.successbox]',
+            `url = ${string(endpoint.origin + '/mcp')}`,
+            'bearer_token_env_var = "SUCCESSBOX_MCP_TOKEN"',
+            '',
+          ].join('\n'),
+        };
+      } else {
+        environment.set('CLAUDE_CONFIG_DIR', `CLAUDE_CONFIG_DIR=${directory}`);
+        environment.set(
+          'ANTHROPIC_BASE_URL',
+          `ANTHROPIC_BASE_URL=${endpoint.origin}`,
+        );
+        environment.set(
+          'ANTHROPIC_API_KEY',
+          `ANTHROPIC_API_KEY=${gateway.llmToken}`,
+        );
+        agentConfiguration = {
+          directory,
+          name: 'mcp.json',
+          content: JSON.stringify({
+            mcpServers: {
+              successbox: {
+                type: 'http',
+                url: endpoint.origin + '/mcp',
+                headers: { Authorization: `Bearer ${gateway.mcpToken}` },
+              },
+            },
+          }),
+        };
+        argv = [
+          ...argv,
+          '--strict-mcp-config',
+          '--mcp-config',
+          `${directory}/mcp.json`,
+          '--model',
+          gateway.model,
+        ];
+      }
+    }
     createRequest.env = [...environment.values()];
     const requestWithAgentEnvironment = JSON.stringify(createRequest, null, 2);
     const directory = await mkdtemp(
@@ -575,7 +869,6 @@ class GatewayBackend implements Backend {
     const command = [sandbox.client, '--socket', sandbox.socket]
       .map(quote)
       .join(' ');
-    const id = randomUUID();
     let observed = false;
     let timer: ReturnType<typeof setInterval> | undefined;
     try {
@@ -612,6 +905,11 @@ class GatewayBackend implements Backend {
           "trap 'exit 143' TERM",
           `sandbox_id=$(${command} create ${quote(path.join(directory, 'create.json'))}) || exit $?`,
           `printf '%s\\n' "$sandbox_id" > ${quote(identity)}`,
+          ...(agentConfiguration
+            ? [
+                `printf '%s' ${quote(Buffer.from(agentConfiguration.content, 'utf8').toString('base64'))} | ${command} exec --sandbox "$sandbox_id" -- /bin/sh -ec ${quote('umask 077; mkdir -m 700 "$1"; base64 -d > "$1/$2"')} successbox-config ${quote(agentConfiguration.directory)} ${quote(agentConfiguration.name)} || exit $?`,
+              ]
+            : []),
           `printf '%s\\n' ${quote('Successbox · ' + AGENT_NAMES[agent] + ' · 沙箱终端')}`,
           `${command} exec --sandbox "$sandbox_id" --tty -- ${argv.map(quote).join(' ')} < /dev/tty &`,
           'worker=$!',
@@ -640,9 +938,11 @@ class GatewayBackend implements Backend {
             run.sandboxId = readFileSync(identity, 'utf8').trim();
             run.status = 'running';
           }
-          this.state.terminalMessage = agentEnvironment.length
-            ? '终端已连接沙箱，已加载本次 Agent 的网关环境'
-            : '终端已连接沙箱；未配置 Agent 网关环境变量';
+          this.state.terminalMessage = gateway
+            ? '终端已连接沙箱，已配置模型和 MCP 网关'
+            : agentEnvironment.length
+              ? '终端已连接沙箱，已加载本次 Agent 的网关环境'
+              : '终端已连接沙箱；未配置 Agent 网关环境变量';
           this.changed();
         }
         if (!existsSync(result)) return;
