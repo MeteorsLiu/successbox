@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,6 +20,8 @@ import (
 // gateways composes the native gateway programs. Their own configuration and
 // credential stores remain authoritative; sbx does not copy upstream secrets.
 func gateways(ctx context.Context, args []string, output io.Writer) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	flags := flag.NewFlagSet("gateways", flag.ContinueOnError)
 	flags.SetOutput(output)
 	llmBinary := flags.String("cliproxy", "cli-proxy-api", "CLIProxyAPI executable")
@@ -26,11 +29,22 @@ func gateways(ctx context.Context, args []string, output io.Writer) error {
 	mcpBinary := flags.String("bifrost", "bifrost-http", "Bifrost executable")
 	mcpDir := flags.String("mcp-dir", "", "Bifrost directory containing config.json and its database")
 	mcpPort := flags.Uint("mcp-port", 8081, "Bifrost loopback HTTP port")
+	controlListen := flags.String("control-listen", "", "host HTTP/2 address for GatewaySession, for example 127.0.0.1:9090")
+	controlDB := flags.String("control-db", "", "SQLite database for GatewaySession state")
+	frontendToken := flags.String("control-frontend-token", "", "bearer token for the frontend control client")
+	gatewayToken := flags.String("control-gateway-token", "", "bearer token for the MCP gateway control client")
+	agentToken := flags.String("control-agent-token", "", "bearer token for the sandbox agent control client")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 || *llmConfig == "" || *mcpDir == "" || *mcpPort == 0 || *mcpPort > 65535 {
 		return errors.New("gateways requires --llm-config, --mcp-dir and a valid --mcp-port")
+	}
+	if *controlListen != "" && *controlDB == "" {
+		return errors.New("--control-db is required when --control-listen is set")
+	}
+	if *controlListen == "" && (*controlDB != "" || *frontendToken != "" || *gatewayToken != "" || *agentToken != "") {
+		return errors.New("--control-listen is required for GatewaySession control options")
 	}
 	llmPath, err := filepath.Abs(*llmConfig)
 	if err != nil {
@@ -114,13 +128,92 @@ func gateways(ctx context.Context, args []string, output io.Writer) error {
 	if err != nil {
 		return err
 	}
+	var mcp *gatewayMCP
+	var mcpListener net.Listener
+	upstreamPort := int(*mcpPort)
+	if *controlListen != "" {
+		var native struct {
+			Governance struct {
+				Auth struct {
+					Enabled  bool   `json:"is_enabled"`
+					Username string `json:"admin_username"`
+					Password string `json:"admin_password"`
+				} `json:"auth_config"`
+				Keys []struct {
+					ID     string `json:"id"`
+					Value  string `json:"value"`
+					Active bool   `json:"is_active"`
+				} `json:"virtual_keys"`
+			} `json:"governance"`
+		}
+		if err := json.Unmarshal(data, &native); err != nil {
+			return errors.New("invalid MCP management configuration")
+		}
+		if !native.Governance.Auth.Enabled || native.Governance.Auth.Username == "" || native.Governance.Auth.Password == "" {
+			return errors.New("MCP installation requires Bifrost admin authentication in its private configuration")
+		}
+		keys := make(map[string]string)
+		for _, key := range native.Governance.Keys {
+			if key.Active && key.ID != "" && key.Value != "" {
+				keys[key.ID] = key.Value
+			}
+		}
+		listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", *mcpPort))
+		if err != nil {
+			return err
+		}
+		mcpListener = listener
+		defer mcpListener.Close()
+		upstream, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			return err
+		}
+		upstreamPort = upstream.Addr().(*net.TCPAddr).Port
+		if err := upstream.Close(); err != nil {
+			return err
+		}
+		mcp = &gatewayMCP{base: fmt.Sprintf("http://127.0.0.1:%d", upstreamPort), username: native.Governance.Auth.Username, password: native.Governance.Auth.Password, keys: keys, sessions: make(map[string]*gatewayMCPSession), client: &http.Client{CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}}
+	}
 	commands := []*exec.Cmd{
 		exec.Command(llmExecutable, "-config", llmPath, "-local-model"),
-		exec.Command(mcpExecutable, "-host", "127.0.0.1", "-port", fmt.Sprint(*mcpPort), "-app-dir", mcpPath, "-log-level", "warn"),
+		exec.Command(mcpExecutable, "-host", "127.0.0.1", "-port", fmt.Sprint(upstreamPort), "-app-dir", mcpPath, "-log-level", "warn"),
 	}
 	commands[0].Dir = filepath.Dir(llmPath)
 	commands[1].Dir = mcpPath
-	return superviseGateways(ctx, commands, output)
+	controlStop, controlErrors, err := startGatewayControl(ctx, *controlListen, *controlDB, map[string]string{
+		"frontend": *frontendToken,
+		"gateway":  *gatewayToken,
+		"agent":    *agentToken,
+	}, mcp)
+	if err != nil {
+		return err
+	}
+	defer controlStop()
+	var httpErrors <-chan error
+	if mcp != nil {
+		httpServer := &http.Server{Handler: http.HandlerFunc(mcp.serveHTTP)}
+		defer httpServer.Close()
+		errors := make(chan error, 1)
+		httpErrors = errors
+		go func() { errors <- httpServer.Serve(mcpListener) }()
+	}
+	gatewayDone := make(chan error, 1)
+	go func() { gatewayDone <- superviseGateways(ctx, commands, output) }()
+	select {
+	case err := <-gatewayDone:
+		return err
+	case err := <-controlErrors:
+		cancel()
+		controlStop()
+		<-gatewayDone
+		return err
+	case err := <-httpErrors:
+		cancel()
+		controlStop()
+		<-gatewayDone
+		return err
+	}
+
 }
 
 // A gateway pair belongs to one foreground command. If either exits, stop both
