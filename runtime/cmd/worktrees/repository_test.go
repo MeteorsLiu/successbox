@@ -155,9 +155,9 @@ func TestDiscoveryMountBoundaries(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m := &manager{root: source, directory: t.TempDir(), mounts: []specs.Mount{tc.mount}, repositories: make(map[string]*repository)}
-			response, fd, err := m.prepare(request{Path: "/project/file"})
-			if err != nil || fd != -1 || response.Path != "" || len(m.repositories) != 0 {
-				t.Fatalf("response=%+v fd=%d err=%v", response, fd, err)
+			path, err := m.prepare(request{Path: "/project/file"})
+			if err != nil || path != "" || len(m.repositories) != 0 {
+				t.Fatalf("path=%q err=%v", path, err)
 			}
 		})
 	}

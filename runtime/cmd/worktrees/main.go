@@ -5,12 +5,13 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"log"
+	"net"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -21,19 +22,12 @@ import (
 
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"golang.org/x/sys/unix"
-	"gvisor.dev/gvisor/pkg/lisafs"
-	"gvisor.dev/gvisor/pkg/unet"
-	"gvisor.dev/gvisor/runsc/fsgofer"
 )
 
 type request struct {
 	Path     string
 	UID, GID uint32
 	Groups   []uint32
-}
-type response struct {
-	Path  string
-	Error string
 }
 type repository struct {
 	Source, Directory   string
@@ -46,7 +40,7 @@ type manager struct {
 	mounts          []specs.Mount
 	mu              sync.Mutex
 	repositories    map[string]*repository
-	stops           []func()
+	mappings        map[string]string
 }
 
 func main() {
@@ -70,10 +64,10 @@ func main() {
 	if *socket == "" || *bundle == "" || *directory == "" {
 		log.Fatal("--socket, --bundle and --state are required")
 	}
-	// The first implementation preserves host inode owners directly. A rootless
-	// gofer needs a matching user namespace before it can represent these IDs.
+	// Preparation and publication use host IDs. Rootless user-namespace ID
+	// translation is not part of this command.
 	if os.Geteuid() != 0 {
-		log.Fatal("experimental worktrees currently require a rootful backend")
+		log.Fatal("worktrees require a rootful backend")
 	}
 	data, err := os.ReadFile(filepath.Join(*bundle, "config.json"))
 	if err != nil {
@@ -106,10 +100,7 @@ func main() {
 	if err := os.MkdirAll(*directory, 0711); err != nil {
 		log.Fatal(err)
 	}
-	if err := fsgofer.OpenProcSelfFD("/proc/self/fd"); err != nil {
-		log.Fatal(err)
-	}
-	listener, err := unet.BindAndListen(*socket, true)
+	listener, err := net.ListenUnix("unixpacket", &net.UnixAddr{Name: *socket, Net: "unixpacket"})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -121,7 +112,7 @@ func main() {
 	if spec.Root.Readonly {
 		root = ""
 	}
-	m := &manager{root: root, directory: *directory, mounts: spec.Mounts, repositories: make(map[string]*repository)}
+	m := &manager{root: root, directory: *directory, mounts: spec.Mounts, repositories: make(map[string]*repository), mappings: make(map[string]string)}
 	if *readyFD >= 0 {
 		f := os.NewFile(uintptr(*readyFD), "ready")
 		if _, err := f.Write([]byte{1}); err != nil {
@@ -129,44 +120,12 @@ func main() {
 		}
 		f.Close()
 	}
-	signals := make(chan os.Signal, 1)
-	signal.Notify(signals, syscall.SIGTERM, os.Interrupt)
-	var clients sync.WaitGroup
-	var peersMu sync.Mutex
-	var peers []*unet.Socket
-	stopped := make(chan struct{})
-	go func() {
-		<-signals
-		listener.Close()
-		peersMu.Lock()
-		for _, p := range peers {
-			p.Shutdown()
-		}
-		peersMu.Unlock()
-		close(stopped)
-	}()
-	for {
-		peer, err := listener.Accept()
-		if err != nil {
-			break
-		}
-		peersMu.Lock()
-		peers = append(peers, peer)
-		peersMu.Unlock()
-		clients.Add(1)
-		go func() {
-			defer clients.Done()
-			defer peer.Close()
-			if err := m.serve(peer); err != nil && !errors.Is(err, io.EOF) {
-				log.Print(err)
-			}
-		}()
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
+	defer cancel()
+	if err := serve(ctx, listener, m.inspect); err != nil && !errors.Is(err, context.Canceled) {
+		log.Fatal(err)
 	}
-	<-stopped
-	clients.Wait()
-	for _, stop := range m.stops {
-		stop()
-	}
+
 	failed := false
 	for _, repo := range m.repositories {
 		var metadata unix.Stat_t
@@ -196,59 +155,18 @@ func main() {
 	}
 }
 
-func (m *manager) serve(peer *unet.Socket) error {
-	buffer := make([]byte, 64*1024)
-	for {
-		n, err := peer.Read(buffer)
-		if err != nil {
-			return err
-		}
-		if n == 0 {
-			return io.EOF
-		}
-		if n == len(buffer) {
-			return errors.New("oversized worktree request")
-		}
-		var req request
-		if err := json.Unmarshal(buffer[:n], &req); err != nil {
-			return err
-		}
-		res, client, err := m.prepare(req)
-		if err != nil {
-			res.Error = err.Error()
-		}
-		data, err := json.Marshal(res)
-		if err != nil {
-			return err
-		}
-		writer := peer.Writer(true)
-		if client >= 0 {
-			writer.PackFDs(client)
-		}
-		n, err = writer.WriteVec([][]byte{data})
-		if client >= 0 {
-			unix.Close(client)
-		}
-		if err != nil {
-			return err
-		}
-		if n != len(data) {
-			return io.ErrShortWrite
-		}
-	}
-}
-
 func within(path, root string) bool {
 	return path == root || strings.HasPrefix(path, strings.TrimSuffix(root, "/")+"/")
 }
 
-func (m *manager) prepare(req request) (response, int, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+func (m *manager) prepare(req request) (string, error) {
 	if !filepath.IsAbs(req.Path) || strings.ContainsRune(req.Path, 0) {
-		return response{}, -1, errors.New("invalid guest path")
+		return "", errors.New("invalid guest path")
 	}
 	guest := filepath.Clean(req.Path)
+	if within(guest, m.directory) {
+		return guest, nil
+	}
 	sourceRoot, guestRoot := m.root, "/"
 	longest := 0
 	for _, mount := range m.mounts {
@@ -269,12 +187,15 @@ func (m *manager) prepare(req request) (response, int, error) {
 		}
 	}
 	if sourceRoot == "" {
-		return response{}, -1, nil
+		return "", nil
+	}
+	if mapped := m.mapped(guest); mapped != "" {
+		return mapped, nil
 	}
 	relative, _ := filepath.Rel(guestRoot, guest)
 	source := filepath.Join(sourceRoot, relative)
 	if within(source, m.directory) {
-		return response{}, -1, nil
+		return "", nil
 	}
 	// Paths come from Sentry's permission-checked, symlink-resolved VFS lookup.
 	// Never search above the root of the host mount that supplied that path.
@@ -284,19 +205,19 @@ func (m *manager) prepare(req request) (response, int, error) {
 			break
 		}
 		if err != nil && !errors.Is(err, os.ErrNotExist) && !errors.Is(err, unix.ENOTDIR) {
-			return response{}, -1, err
+			return "", err
 		}
 		if source == sourceRoot {
-			return response{}, -1, nil
+			return "", nil
 		}
 		parent := filepath.Dir(source)
 		if parent == source || !within(parent, sourceRoot) {
-			return response{}, -1, nil
+			return "", nil
 		}
 		source = parent
 	}
 	if within(m.directory, source) {
-		return response{}, -1, errors.New("runtime state must be outside the source repository")
+		return "", errors.New("runtime state must be outside the source repository")
 	}
 	rel, _ := filepath.Rel(sourceRoot, source)
 	target := filepath.Join(guestRoot, rel)
@@ -304,56 +225,40 @@ func (m *manager) prepare(req request) (response, int, error) {
 	if repo == nil {
 		privateRoot, err := os.MkdirTemp(m.directory, "repo-")
 		if err != nil {
-			return response{}, -1, err
+			return "", err
 		}
 		if err := os.Chown(privateRoot, int(req.UID), int(req.GID)); err != nil {
-			return response{}, -1, err
+			return "", err
 		}
 		destination := filepath.Join(privateRoot, "worktree")
 		var metadata unix.Stat_t
 		if err := unix.Lstat(filepath.Join(source, ".git"), &metadata); err != nil {
-			return response{}, -1, err
+			return "", err
 		}
 		exe, err := os.Executable()
 		if err != nil {
-			return response{}, -1, err
+			return "", err
 		}
 		cmd := exec.Command(exe, "prepare", source, destination)
 		cmd.Env = gitEnvironment()
 		cmd.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: req.UID, Gid: req.GID, Groups: req.Groups}}
 		if output, err := cmd.CombinedOutput(); err != nil {
-			return response{}, -1, fmt.Errorf("prepare %s: %w: %s", source, err, output)
+			return "", fmt.Errorf("prepare %s: %w: %s", source, err, output)
 		}
 		repo = &repository{Source: source, Directory: destination, UID: req.UID, GID: req.GID, Groups: req.Groups, GitDevice: uint64(metadata.Dev), GitInode: metadata.Ino}
 		m.repositories[source] = repo
 		data, err := json.MarshalIndent(m.repositories, "", "  ")
 		if err != nil {
-			return response{}, -1, err
+			return "", err
 		}
 		if err := os.WriteFile(filepath.Join(m.directory, "repositories.json"), append(data, '\n'), 0600); err != nil {
-			return response{}, -1, err
+			return "", err
 		}
 		log.Printf("private repository: %s -> %s", source, destination)
 	}
-	pair, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
-	if err != nil {
-		return response{}, -1, err
+	if m.mappings == nil {
+		m.mappings = make(map[string]string)
 	}
-	socket, err := unet.NewSocket(pair[1])
-	if err != nil {
-		unix.Close(pair[0])
-		unix.Close(pair[1])
-		return response{}, -1, err
-	}
-	server := lisafs.NewServer()
-	conn, err := server.CreateConnection(socket, repo.Directory, fsgofer.ConnectionOpts(false), fsgofer.NewConnectionImpl(&fsgofer.Config{DonateMountPointFD: true}))
-	if err != nil {
-		socket.Close()
-		unix.Close(pair[0])
-		server.Destroy()
-		return response{}, -1, err
-	}
-	server.StartConnection(conn)
-	m.stops = append(m.stops, func() { socket.Close(); server.Wait(); server.Destroy() })
-	return response{Path: target}, pair[0], nil
+	m.mappings[target] = repo.Directory
+	return repo.Directory + strings.TrimPrefix(guest, target), nil
 }

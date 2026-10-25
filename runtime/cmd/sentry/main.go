@@ -3,7 +3,7 @@
 package main
 
 import (
-	_ "github.com/MeteorsLiu/successbox/experimental/platform/internal/observe"
+	_ "github.com/MeteorsLiu/successbox/runtime/internal/platform"
 	"gvisor.dev/gvisor/runsc/cli"
 	"gvisor.dev/gvisor/runsc/cmd/sentry/sentrycmd"
 	"gvisor.dev/gvisor/runsc/cmd/util"

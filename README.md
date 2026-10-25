@@ -1,4 +1,4 @@
-# Successbox prototype
+# Successbox
 
 A local gRPC service for creating sandboxes, executing commands, and connecting to an RDP desktop. The frontend receives a sandbox ID; it does not need a guest IP address. The backend never opens a viewer window.
 
@@ -42,7 +42,7 @@ On macOS, provide an ARM64 Linux kernel and a Containerization `initfs.ext4` con
   --initfs /absolute/path/to/initfs.ext4
 ```
 
-The initfs is separate from the application's rootfs. Both services restrict their control socket to its owner. The prototype has no external guest network: RDP is reached through the runtime transport, not an exposed host port. `--rdp-port` selects the guest port and defaults to 3389.
+The initfs is separate from the application's rootfs. Both services restrict their control socket to its owner. The service has no external guest network: RDP is reached through the runtime transport, not an exposed host port. `--rdp-port` selects the guest port and defaults to 3389.
 
 ## Create, execute, display, close
 
@@ -116,4 +116,4 @@ Both arm64 backends passed TTY checks for initial size, resize, interactive inpu
 
 The minimal test image still reports missing Openbox menu/PyXDG autostart components. These checks launch the terminal explicitly through Exec; desktop menus and autostart are not covered.
 
-This prototype covers sandbox control and RDP transport. It does not yet integrate the frontend, MCP gateway, or LLM gateway.
+Successbox currently covers sandbox control and RDP transport. It does not yet integrate the frontend, MCP gateway, or LLM gateway.
