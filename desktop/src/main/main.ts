@@ -510,6 +510,7 @@ class GatewayBackend implements Backend {
         create: string;
         terminal: string[];
         commands?: Partial<Record<AgentId, string[]>>;
+        environment?: Partial<Record<AgentId, string[]>>;
       };
     };
     const sandbox = configuration.sandbox;
@@ -533,10 +534,36 @@ class GatewayBackend implements Backend {
     )
       throw new Error('Agent 启动参数必须是非空字符串数组');
     const request = await readFile(sandbox.create, 'utf8');
-    const options = JSON.parse(request) as {
+    const createRequest = JSON.parse(request) as {
       workingDir?: string;
       working_dir?: string;
+      env?: string[];
     };
+    const agentEnvironment = sandbox.environment?.[agent] ?? [];
+    if (
+      !Array.isArray(agentEnvironment) ||
+      agentEnvironment.some((value) => {
+        const separator = typeof value === 'string' ? value.indexOf('=') : -1;
+        return (
+          typeof value !== 'string' ||
+          separator <= 0 ||
+          !value.slice(0, separator).trim() ||
+          value.includes('\0')
+        );
+      })
+    )
+      throw new Error('Agent 网关环境变量必须是 KEY=VALUE 字符串');
+    if (!Array.isArray(createRequest.env)) createRequest.env = [];
+    const environment = new Map<string, string>();
+    for (const value of createRequest.env) {
+      const separator = typeof value === 'string' ? value.indexOf('=') : -1;
+      if (separator > 0) environment.set(value.slice(0, separator), value);
+    }
+    for (const value of agentEnvironment) {
+      environment.set(value.slice(0, value.indexOf('=')), value);
+    }
+    createRequest.env = [...environment.values()];
+    const requestWithAgentEnvironment = JSON.stringify(createRequest, null, 2);
     const directory = await mkdtemp(
       path.join(tmpdir(), 'successbox-terminal-'),
     );
@@ -552,9 +579,13 @@ class GatewayBackend implements Backend {
     let observed = false;
     let timer: ReturnType<typeof setInterval> | undefined;
     try {
-      await writeFile(path.join(directory, 'create.json'), request, {
-        mode: 0o600,
-      });
+      await writeFile(
+        path.join(directory, 'create.json'),
+        requestWithAgentEnvironment,
+        {
+          mode: 0o600,
+        },
+      );
       // The terminal owns Create/Exec/Close independently of the desktop UI.
       // A shell defers traps while waiting for a foreground command. Use its
       // interruptible wait builtin so terminal HUP can Close a running guest.
@@ -592,7 +623,7 @@ class GatewayBackend implements Backend {
       this.state.runs.push({
         id,
         agent,
-        cwd: options.workingDir ?? options.working_dir ?? '/',
+        cwd: createRequest.workingDir ?? createRequest.working_dir ?? '/',
         protected: true,
         startedAt: new Date().toLocaleString(),
         status: 'starting',
@@ -609,8 +640,9 @@ class GatewayBackend implements Backend {
             run.sandboxId = readFileSync(identity, 'utf8').trim();
             run.status = 'running';
           }
-          this.state.terminalMessage =
-            '终端已连接沙箱；本轮尚未接入沙箱到模型网关的网络';
+          this.state.terminalMessage = agentEnvironment.length
+            ? '终端已连接沙箱，已加载本次 Agent 的网关环境'
+            : '终端已连接沙箱；未配置 Agent 网关环境变量';
           this.changed();
         }
         if (!existsSync(result)) return;

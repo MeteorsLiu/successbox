@@ -35,7 +35,8 @@ export function AgentPage({
         <div className="h2">{name} 沙箱终端</div>
         <div className="note">
           在隔离环境中启动 {name}
-          。本轮接入终端和退出清理；沙箱到模型网关的网络、账号管理及改动展示尚未接入。
+          。本轮接入终端、退出清理和按 Agent
+          加载网关环境；账号管理及改动展示尚未接入。
         </div>
         <div className="card row">
           <div style={{ flex: 1 }}>
