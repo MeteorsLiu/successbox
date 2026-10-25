@@ -15,6 +15,8 @@ Successbox 是 Claude Code 和 Codex 的桌面配套工具，围绕执行隔离�
 
 **[总体架构](https://github.com/MeteorsLiu/successbox/issues/2) · [产品设计](https://github.com/MeteorsLiu/successbox/issues/16) · [本地运行](#快速开始) · [API 文档](api/README.md)**
 
+[视频链接](https://www.bilibili.com/video/BV1eznS6HEgP/)
+
 项目仍在开发中，运行时、网关与桌面端正在逐步接通。下文区分产品目标和当前 `main` 分支的实现；完整用户环境继承与桌面端到端流程尚未完成。
 
 ## 先看这些
