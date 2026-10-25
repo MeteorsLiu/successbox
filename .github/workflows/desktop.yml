@@ -5,21 +5,44 @@ on:
   pull_request:
     paths:
       - 'desktop/**'
-      - 'api/gateway/v1/gateway.proto'
+      - 'apple/**'
+      - 'api/**'
+      - 'cmd/**'
+      - 'runtime/**'
+      - 'gateways/**'
       - '.github/workflows/desktop.yml'
   push:
-    branches: [main]
-    paths:
-      - 'desktop/**'
-      - 'api/gateway/v1/gateway.proto'
-      - '.github/workflows/desktop.yml'
+    tags: ['v*']
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
+  guest:
+    name: Build Apple Linux payload
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends debootstrap e2fsprogs xz-utils
+      - name: Build guest resources natively
+        run: bash desktop/scripts/build-guest.sh "$RUNNER_TEMP/guest"
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: apple-guest
+          path: ${{ runner.temp }}/guest/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 3
+
   package:
     name: Package (${{ matrix.platform }}-${{ matrix.arch }})
+    needs: guest
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -32,36 +55,114 @@ jobs:
           - runner: ubuntu-24.04
             platform: linux
             arch: x64
-            targets: '@electron-forge/maker-zip,@electron-forge/maker-deb'
-    defaults:
-      run:
-        working-directory: desktop
+            targets: '@electron-forge/maker-deb'
+          - runner: ubuntu-24.04-arm
+            platform: linux
+            arch: arm64
+            targets: '@electron-forge/maker-deb'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '24'
           cache: npm
           cache-dependency-path: desktop/package-lock.json
-      - name: Install Linux packaging tools
+      - name: Install Linux build dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install --no-install-recommends -y fakeroot dpkg zip
-      - name: Install dependencies
+          sudo apt-get install -y --no-install-recommends fakeroot dpkg zip cmake ninja-build patchelf libssl-dev libx11-dev libxext-dev libxinerama-dev libxcursor-dev libxfixes-dev libxrandr-dev libxrender-dev libxi-dev libxkbfile-dev libxv-dev libwayland-dev libxkbcommon-dev
+      - name: Install macOS build dependencies
+        if: runner.os == 'macOS'
+        run: brew install cmake ninja openssl@3 sdl3 sdl3_ttf
+      - name: Download guest payload
+        if: runner.os == 'macOS'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: gh run download "$RUN_ID" --name apple-guest --dir "$RUNNER_TEMP/guest"
+      - name: Build declared runtime resources
+        run: python3 desktop/scripts/build-runtime.py desktop/.runtime/runtime "$RUNNER_TEMP/guest"
+      - name: Verify native gateway protocols
+        run: |
+          plugin_extension=so
+          if [[ "$RUNNER_OS" == macOS ]]; then plugin_extension=dylib; fi
+          runtime="$PWD/desktop/.runtime/runtime"
+          arch=$(go env GOARCH)
+          platform=$(go env GOOS)
+          python3 testdata/gateways/run.py "$runtime/host/sbx" "$runtime/host/cli-proxy-api" "$runtime/host/bifrost-http" "$runtime/host/plugins/$platform/$arch/successbox.$plugin_extension"
+      - name: Install frontend dependencies
+        working-directory: desktop
         run: npm ci
-      - name: Typecheck
-        run: npm run typecheck
-      - name: Lint
-        run: npm run lint
-      - name: Make application packages
+      - name: Set release version
+        if: startsWith(github.ref, 'refs/tags/')
+        working-directory: desktop
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: npm version --no-git-tag-version --allow-same-version "${RELEASE_TAG#v}"
+      - name: Check frontend
+        working-directory: desktop
+        run: |
+          npm run typecheck
+          npm run lint
+      - name: Make complete application package
+        working-directory: desktop
+        env:
+          SUCCESSBOX_RELEASE: '1'
         run: npm run make -- --platform=${{ matrix.platform }} --arch=${{ matrix.arch }} --targets=${{ matrix.targets }}
-      - name: Upload application packages
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+      - name: Collect distribution and checksums
+        env:
+          TARGET: ${{ matrix.platform }}-${{ matrix.arch }}
+        run: |
+          mkdir -p dist
+          python3 - <<'PY'
+          import hashlib, os, pathlib, shutil
+          root = pathlib.Path('dist')
+          for item in pathlib.Path('desktop/out/make').rglob('*'):
+              if item.suffix not in ('.zip', '.deb'): continue
+              target = root / (os.environ['TARGET'] + '-' + item.name)
+              shutil.copy2(item, target)
+              with target.open('rb') as stream:
+                  digest = hashlib.file_digest(stream, 'sha256').hexdigest()
+              (root / (target.name + '.sha256')).write_text(digest + '  ' + target.name + '\n')
+          assert list(root.glob('*.sha256')), 'no packages produced'
+          PY
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
-          name: successbox-${{ matrix.platform }}-${{ matrix.arch }}-${{ github.sha }}
-          path: desktop/out/make/
+          name: successbox-${{ matrix.platform }}-${{ matrix.arch }}
+          path: dist/
           if-no-files-found: error
           compression-level: 0
+
+  release:
+    name: Publish tagged release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: package
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Download packages and publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          gh run download "$RUN_ID" --pattern 'successbox-*' --dir artifacts
+          mkdir dist
+          find artifacts -type f -exec cp {} dist/ \;
+          test "$(find dist -name '*.sha256' | wc -l)" -eq 3
+          (cd dist && sha256sum --check ./*.sha256)
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" --verify-tag --draft --title "Successbox $RELEASE_TAG" --generate-notes
+          fi
+          gh release upload "$RELEASE_TAG" dist/* --clobber
+          gh release edit "$RELEASE_TAG" --draft=false --latest
