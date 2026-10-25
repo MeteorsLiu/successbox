@@ -2,6 +2,7 @@
 """Verify the desktop's rootful backend contract on a native Linux runner."""
 import os
 from pathlib import Path
+import shutil
 import stat
 import subprocess
 import sys
@@ -13,6 +14,13 @@ assert sys.platform == 'linux' and os.geteuid() == 0
 with tempfile.TemporaryDirectory(prefix='successbox-owner-', dir='/tmp') as temporary:
     directory = Path(temporary)
     directory.chmod(0o711)
+    # Hosted runner ancestors are private to its login UID. Test the socket
+    # permissions without failing before exec on that unrelated directory.
+    shutil.copy2(client, directory / 'sbx')
+    shutil.copy2(backend, directory / 'backend')
+    client, backend = str(directory / 'sbx'), str(directory / 'backend')
+    os.chmod(client, 0o755)
+    os.chmod(backend, 0o755)
     socket = directory / 'control.sock'
     args = [backend, '--socket', str(socket), '--state', str(directory / 'state'), '--runsc', '/bin/true', '--socket-uid', '1000', '--exit-on-stdin-close']
     with (directory / 'backend.log').open('wb') as log:
