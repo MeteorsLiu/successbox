@@ -57,6 +57,7 @@ jobs:
           binary_dir="$RUNNER_TEMP/worktrees-bin"
           go -C .. build -o "$binary_dir/sbx" ./cmd/sbx
           go -C .. build -o "$binary_dir/successbox-gvisor" ./cmd/successbox-gvisor
+          sudo python3 ../testdata/backend-owner.py "$binary_dir/sbx" "$binary_dir/successbox-gvisor"
           printf '#!/bin/sh\nexec "%s/runsc" --ignore-cgroups "$@"\n' "$binary_dir" > "$binary_dir/runsc-test"
           chmod +x "$binary_dir/runsc-test"
           fixture_parent=$(mktemp -d /var/tmp/successbox-worktree-service.XXXXXX)
