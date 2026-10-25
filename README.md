@@ -132,7 +132,7 @@ Connect the RDP client to that local port. The CLI does not launch it. This opti
 
 ## Wire behavior
 
-See [sandbox.proto](api/sandbox/v1/sandbox.proto).
+See [sandbox.proto](api/sandbox/v1/sandbox.proto). The [frontend API contract](api/README.md) covers sandbox RPCs and GatewaySession, including authentication, message examples, response correlation and current integration gaps.
 
 | RPC | Request and response |
 | --- | --- |
