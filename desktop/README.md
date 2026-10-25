@@ -50,6 +50,16 @@ SUCCESSBOX_GATEWAY_CONFIG=/absolute/path/to/gateway.json npm start
     "commands": {
       "codex": ["codex"],
       "claude": ["claude"]
+    },
+    "environment": {
+      "codex": [
+        "HTTP_PROXY=http://gateway.internal:8080",
+        "HTTPS_PROXY=http://gateway.internal:8080"
+      ],
+      "claude": [
+        "ANTHROPIC_BASE_URL=http://gateway.internal:8080",
+        "ANTHROPIC_API_KEY=successbox-client"
+      ]
     }
   }
 }
@@ -58,6 +68,8 @@ SUCCESSBOX_GATEWAY_CONFIG=/absolute/path/to/gateway.json npm start
 `terminal` 是宿主命令及参数数组，应用在最后追加私有、可执行的 `.command` 文件。上例是已实测的 macOS Terminal 调用；Linux 需配置能执行该文件的已安装终端启动器。`commands` 可省略，默认使用 `codex`、`claude`。命令与参数逐项引用，不作为未转义的 shell 输入。
 
 `client`、`socket`、`create` 必须是宿主绝对路径。`create` 内容是原有 Create 请求 JSON，原样交给 `sbx`。rootfs、挂载和工作目录由后端解释：macOS gVisor 模式下指 Linux VM 内的路径，不能当成 macOS 项目路径。运行环境必须已包含待执行的 Linux 程序及 PATH。启动终端不要求网关控制流已连接，也不会自动创建账号或网关绑定。
+
+`environment` 按 Agent 将网关数据入口注入 Create 的 `env`。它不是 GatewaySession 控制地址；控制 token 不会自动注入 Agent。每项必须是 `KEY=VALUE`，同名变量覆盖 `create` 文件中的值。真实配置文件应保持 0600，输入值不会进入 renderer 状态快照。网关入口必须是 guest 能通过网络访问的地址；`127.0.0.1` 仍指向 guest 自身。
 
 每次点击创建独立沙箱。终端脚本执行 Create → Exec（PTY）→ Close，桌面观察该次运行的私有状态文件。退出桌面 UI 不会关闭正在使用的终端，重新打开 UI 暂不恢复原运行列表。程序退出或终端在 Exec 期间收到 HUP 后，脚本负责 Close；成功时界面移除记录，失败则保留沙箱 ID 和日志路径。启动失败不会退回宿主执行。
 
