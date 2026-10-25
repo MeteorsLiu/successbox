@@ -1,30 +1,107 @@
 # Successbox
 
-A local gRPC service for creating sandboxes, executing commands, and connecting to an RDP desktop. The frontend receives a sandbox ID; it does not need a guest IP address. The backend never opens a viewer window.
+[![Go CI](https://github.com/MeteorsLiu/successbox/actions/workflows/go.yml/badge.svg)](https://github.com/MeteorsLiu/successbox/actions/workflows/go.yml)
+[![Platform CI](https://github.com/MeteorsLiu/successbox/actions/workflows/platform.yml/badge.svg)](https://github.com/MeteorsLiu/successbox/actions/workflows/platform.yml)
+[![Gateway tests](https://github.com/MeteorsLiu/successbox/actions/workflows/gateways.yml/badge.svg)](https://github.com/MeteorsLiu/successbox/actions/workflows/gateways.yml)
+[![Apple backend](https://github.com/MeteorsLiu/successbox/actions/workflows/apple.yml/badge.svg)](https://github.com/MeteorsLiu/successbox/actions/workflows/apple.yml)
+![Go 1.27](https://img.shields.io/badge/Go-1.27-00ADD8?style=flat-square&logo=go&logoColor=white)
+![Swift 6.2](https://img.shields.io/badge/Swift-6.2-F05138?style=flat-square&logo=swift&logoColor=white)
+![gVisor](https://img.shields.io/badge/runtime-gVisor-6F42C1?style=flat-square)
+![macOS 26](https://img.shields.io/badge/macOS-26-000000?style=flat-square&logo=apple&logoColor=white)
 
-| Host | Runtime | Desktop transport |
-| --- | --- | --- |
-| Linux | gVisor `runsc` | Guest `socat` bridges the RDP port through `runsc exec` IO |
-| macOS, Apple Silicon | Apple Containerization / Virtualization.framework | Guest `socat` bridges the RDP port through Containerization's process IO |
-| macOS, Apple Silicon, gVisor mode | Apple Linux VM hosting the Linux gVisor backend | The existing gVisor `Display` stream crosses the VM's socket relay |
+**让 Claude Code 和 Codex 在熟悉的工作流中获得隔离保护。**
 
-All modes carry RDP bytes through the same `Display` RPC. The macOS backend does not use private Apple APIs, virtual graphics, or USB devices. A headless RDP desktop must already be installed and started inside the supplied guest filesystem.
+Successbox 是 Agent 的配套运行时：它在宿主机上管理受控的沙箱、网关和结果保存，让用户继续使用原来的 Agent、项目和配置。它不是另一个 Agent，也不是通用虚拟机管理器。Agent 通过统一的 gRPC 生命周期运行，桌面场景通过同一条 `Display` 流传输 RDP 画面与输入。
 
-## Build
+项目目前处于持续集成阶段。下面先说明产品和架构，再给出已经实现的能力、明确的边界以及本地运行入口。
 
-The Go module uses Go 1.27.1. The Swift package requires Swift 6.2 or newer and targets macOS 26 or newer; dependencies are pinned in `Package.swift` and `Package.resolved`.
+## 先看这些
 
-```sh
-make go     # Native sbx client; Linux arm64 and amd64 gVisor backends
-make apple  # Native Apple backend, ad-hoc signed for virtualization
-make check  # Go tests with the race detector
+| 主题 | 入口 |
+| --- | --- |
+| 产品方向 | [初版产品设计 #1](https://github.com/MeteorsLiu/successbox/issues/1) · [桌面配套工具 #16](https://github.com/MeteorsLiu/successbox/issues/16) |
+| 总体架构 | [Agent 沙箱、LLM 网关与 Bifrost MCP 网关 #2](https://github.com/MeteorsLiu/successbox/issues/2) |
+| 沙箱协议 | [Create、Exec、Display、Close #3](https://github.com/MeteorsLiu/successbox/issues/3) · [API 契约](api/README.md) |
+| 文件与成果 | [worktree 设计 #7](https://github.com/MeteorsLiu/successbox/issues/7) · [runtime 边界](runtime/README.md) |
+| 网络与网关 | [网络和网关生命周期 #12](https://github.com/MeteorsLiu/successbox/issues/12) · [网关运行说明](gateways/README.md) |
+| MCP 与敏感字段 | [MCP 安装和敏感值交互 #14](https://github.com/MeteorsLiu/successbox/issues/14) · [桌面集成说明](desktop/README.md) |
+| macOS 启动 | [Apple Containerization 承载 gVisor #24](https://github.com/MeteorsLiu/successbox/issues/24) |
+
+Issue 是设计决策和待验证边界的索引，不代表其中所有目标都已经实现。当前行为以协议文件、源码和各模块 README 为准。
+
+## 产品流程
+
+用户不需要学习新的 Agent 命令，也不需要管理 guest IP、挂载点或 VM。典型流程是：
+
+1. 用户在宿主端选择 Claude Code 或 Codex，并保留自己的项目和配置环境。
+2. Successbox 创建一个沙箱，通过受控文件视图、进程树和资源限制启动 Agent。
+3. Agent 的模型请求和 MCP 调用经过宿主网关；真实上游凭据留在可信管理域，沙箱只看到受限身份或占位符。
+4. 用户可以在宿主 UI 中处理 MCP 安装审批和敏感值输入，这些交互不通过 Agent 对话传递。
+5. Agent 结束后，Linux Git 仓库结果可以注册为 detached worktree；沙箱关闭才进入发布流程。
+
+Successbox 的产品原则是：宿主原配置不直接回写，Agent 不能凭自报的 sandbox ID 获得管理权限，关闭沙箱和发布结果是同一个生命周期里的不同阶段。
+
+## 架构
+
+```mermaid
+flowchart LR
+    User["用户"] --> UI["桌面配套工具 / CLI"]
+
+    subgraph Host["宿主管理域"]
+        UI <--> Control["SandboxService\nCreate / Exec / Display / Close"]
+        UI <--> Session["GatewaySession\n宿主控制流"]
+        LLM["LLM 网关\nCLIProxyAPI + Successbox 扩展"]
+        MCP["MCP 网关\nBifrost + virtual key"]
+        Publish["worktree helper\n关闭后发布结果"]
+    end
+
+    subgraph Guest["Agent 执行域"]
+        Runtime["gVisor / Apple Containerization"]
+        Agent["Claude Code / Codex"]
+        Runtime --> Agent
+    end
+
+    Control --> Runtime
+    Agent -->|"模型请求"| LLM
+    Agent -->|"MCP 请求"| MCP
+    Runtime -->|"Display：RDP 字节流"| UI
+    Runtime -->|"关闭后通知"| Publish
+    LLM --> Providers["模型提供方"]
+    MCP --> Services["远程或本地 MCP 服务"]
 ```
 
-Go protobuf bindings are checked in. `make generate` requires `protoc`, `protoc-gen-go`, and `protoc-gen-go-grpc` in `.tools/bin` or `PATH`. SwiftPM generates the Swift bindings from the same schema during its build.
+模块职责保持单向：沙箱运行时只负责执行隔离和生命周期，网关负责协议、上游连接和授权，worktree helper 负责 Git 仓库准备与发布，前端负责用户选择和可信交互。控制流和模型/MCP 数据流是不同的权限域；宿主控制端口不会直接暴露给 guest。
 
-## Start the service
+## 已实现能力与边界
 
-On Linux, install `runsc` and its accompanying release files, then run the matching backend directly:
+| 能力 | 当前状态 |
+| --- | --- |
+| 沙箱生命周期 | Go 后端提供 `Create`、`Exec`、`Display`、`Close`；控制协议是本地 Unix socket 上的 gRPC。 |
+| Linux 后端 | 基于 gVisor `runsc`，支持命令执行、TTY、资源限制和 RDP 转发。 |
+| macOS 后端 | Apple Silicon 上使用 Containerization / Virtualization.framework；也可以启动承载 Linux gVisor 的 VM。 |
+| 桌面传输 | `Display` 传递 RDP 原始字节，键盘和鼠标输入走同一条双向流；断开 viewer 不等于关闭沙箱。 |
+| 网关 | 宿主侧可以启动 CLIProxyAPI 和 Bifrost，并通过 `GatewaySession` 管理 MCP 安装、敏感值和取消操作。 |
+| Git 结果 | Linux `--worktrees` 模式在首次访问仓库时准备私有副本，`Close` 后注册 detached worktree，失败时保留结果。 |
+| 非 Git 文件 | 独立目录保存和目录语义分类尚未完成；普通写入仍属于一次性临时层。 |
+| Agent 配置 | 配置适配、完整用户文件继承、macOS worktree 发布和完整桌面 E2E 仍需单独验证。 |
+
+网关客户端联调已经覆盖真实 CLIProxyAPI、Bifrost、Claude Code 和 Codex 的部分路径，但这不等于完整的“宿主文件环境 → 沙箱 → 模型请求 → MCP → 关闭发布”产品验收。README 中的验证记录会明确区分协议测试、宿主联调和真实桌面验证。
+
+## 快速开始
+
+### 构建
+
+Go 模块需要 Go 1.27.1。Swift 包需要 Swift 6.2 及 macOS 26；依赖版本锁定在 `Package.swift` 和 `Package.resolved`。
+
+```sh
+make go       # 构建 sbx 客户端和 Linux 后端
+make apple    # 构建并签名 Apple 后端
+make check    # Go race tests
+```
+
+### Linux 后端
+
+准备 gVisor `runsc` 及其 release 文件后启动服务：
 
 ```sh
 ./bin/successbox-gvisor-linux-amd64 \
@@ -33,7 +110,25 @@ On Linux, install `runsc` and its accompanying release files, then run the match
   --runsc /absolute/path/to/runsc
 ```
 
-On macOS, provide an ARM64 Linux kernel and a Containerization `initfs.ext4` containing `vminitd` and `vmexec`:
+默认网络为 `none`。网关数据入口和宿主控制端口不是同一个地址；不要把管理端口放进 guest。
+
+启用 Linux Git worktree 流程时，再构建 runtime helper 并传入 `--worktrees`：
+
+```sh
+go build -o bin/successbox-gvisor ./cmd/successbox-gvisor
+CGO_ENABLED=0 go -C runtime build -o ../bin/worktree-runtime/runsc ./cmd/runsc
+CGO_ENABLED=0 go -C runtime build -o ../bin/worktree-runtime/gvisor-bin/gvisor_sentry ./cmd/sentry
+CGO_ENABLED=0 go -C runtime build -o ../bin/worktree-runtime/worktrees ./cmd/worktrees
+sudo ./bin/successbox-gvisor \
+  --socket /var/lib/successbox/control.sock \
+  --state /var/lib/successbox \
+  --runsc "$(pwd)/bin/worktree-runtime/runsc" \
+  --worktrees "$(pwd)/bin/worktree-runtime/worktrees"
+```
+
+### macOS Apple 后端
+
+准备 ARM64 Linux kernel 和包含 `vminitd`、`vmexec` 的 `initfs.ext4`：
 
 ```sh
 ./bin/successbox-apple \
@@ -43,13 +138,9 @@ On macOS, provide an ARM64 Linux kernel and a Containerization `initfs.ext4` con
   --initfs /absolute/path/to/initfs.ext4
 ```
 
-The initfs is separate from the application's rootfs. Both services restrict their control socket to its owner. The service has no external guest network: RDP is reached through the runtime transport, not an exposed host port. `--rdp-port` selects the guest port and defaults to 3389.
+macOS gVisor 模式需要额外提供 Linux rootfs 和 runtime 目录。它运行的是 Linux 程序，不会把 macOS Mach-O 应用放进 guest；宿主项目映射和 worktree 回传也不应从“VM 能启动”推断为已完成。完整命令和图形验证见 [Apple 后端说明](#macos-上的-gvisor) 与测试脚本。
 
-### Run gVisor on macOS
-
-The Apple executable can start one Linux VM hosting the existing `successbox-gvisor` service. All sandbox RPCs pass through Containerization's Unix socket/vsock relay. Multiple gVisor sandboxes share that VM; the Swift launcher does not maintain a second sandbox ID table. This uses the Containerization SDK directly and does not require the `container` CLI, containerd, Docker or nested hardware virtualization.
-
-Build the Linux arm64 runtime alongside the signed Apple executable:
+#### macOS 上的 gVisor
 
 ```sh
 make apple
@@ -67,43 +158,11 @@ CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go -C runtime build -o ../bin/linux-runtim
   --runtime-directory "$(pwd)/bin/linux-runtime"
 ```
 
-The two new options must be supplied together. Without them, the executable continues to provide the original Apple backend. The Linux rootfs must contain `/bin/sh`, `mkdir` and the Linux programs the sandboxes will execute. Both that rootfs and the runtime directory are shared read-only; the VM has a private, sparse 4 GiB ext4 writable layer.
+共享的 Linux rootfs 和 runtime 目录是只读的；VM 使用独立的稀疏 ext4 可写层。默认资源是 4 个 vCPU、1 GiB 外层容器内存和 128 MiB VM 开销。资源上限不是实测占用量。
 
-In this mode, `Create.rootfs`, `workingDir` and mount sources refer to paths **inside the Linux VM**. For example, `{"rootfs":"/","workingDir":"/"}` runs a gVisor sandbox using the VM's Linux environment. It does not expose the macOS root filesystem or run macOS applications. Host project sharing and worktree publication back to macOS are outside this startup step.
+## 协议示例
 
-The Linux init moves itself into `/sys/fs/cgroup/successbox-host` before starting the backend. This leaves the parent free to enable controllers for gVisor's sibling sandbox cgroups; per-sandbox CPU and memory limits remain enabled. The outer runtime receives the existing OCI capabilities plus `CAP_SYS_ADMIN` and `CAP_SYS_RESOURCE` inside its VM. Inner sandbox capabilities remain those of the Linux backend.
-
-The VM uses the pinned SDK's defaults: 4 vCPUs, a 1 GiB outer container memory limit, and 128 MiB of VM overhead. These resources are shared by the Linux backend and its sandboxes. Each `Close` removes only the selected gVisor sandbox. SIGINT or SIGTERM to the Apple launcher asks the Linux backend to close all remaining sandboxes, waits for it to exit, then stops the VM and removes its temporary disk and socket. Boot logs remain under `--state`. Abrupt host termination and restart recovery are not implemented.
-
-The SDK creates the host socket before starting the guest daemon; socket existence alone is not a readiness signal. The forwarded `gVisor backend listening` log indicates that the Linux service has started. Its nonzero exit status is returned by the Apple launcher.
-
-Run the native integration check with prepared kernel, initfs and rootfs assets:
-
-```sh
-go build -o bin/sbx ./cmd/sbx
-python3 testdata/apple-gvisor.py \
-  bin/sbx bin/successbox-apple \
-  /absolute/path/to/vmlinux-arm64 /absolute/path/to/initfs.ext4 \
-  /absolute/path/to/linux-rootfs bin/linux-runtime
-```
-
-The check exercises the socket relay, multiple sandboxes in one VM, filesystem isolation, actual Linux cgroup limits, binary IO, concurrent execution, TTY sizing/resizing/input/Ctrl-C, repeated Close and launcher shutdown with a sandbox still active. It requires macOS 26 or newer on Apple Silicon and runs directly through Virtualization.framework.
-
-For the Display transport, supply a desktop rootfs with `/usr/local/bin/start-desktop` starting xrdp, `/usr/bin/socat`, and its test certificate:
-
-```sh
-python3 testdata/apple-gvisor-display.py \
-  bin/sbx bin/successbox-apple \
-  /absolute/path/to/vmlinux-arm64 /absolute/path/to/initfs.ext4 \
-  /absolute/path/to/desktop-rootfs bin/linux-runtime \
-  /absolute/path/to/test-rdp-certificate.pem
-```
-
-This check negotiates RDP and verifies the TLS certificate through `Display`, disconnects and reconnects, then checks that Exec and cleanup still work. It does not perform graphical login. Separate native validation of this startup mode completed graphical login, a 1024×768 framebuffer capture, a mouse click and keyboard input into xterm; Exec confirmed the terminal received `hello`.
-
-## Create, execute, display, close
-
-Create a JSON file using the protobuf field names:
+Create 请求使用 protobuf 字段名：
 
 ```json
 {
@@ -120,83 +179,57 @@ Create a JSON file using the protobuf field names:
 ./bin/sbx --socket /absolute/path/successbox/control.sock close SANDBOX_ID
 ```
 
-The default init is `/bin/sleep infinity`. To run a desktop, set `desktop` to `true` and supply `initArgv` for the image's startup command. That command must start an RDP server and its headless display/session components. Merely setting `desktop` does not install them. Both desktop backends need `/usr/bin/socat` in the guest image. Configure RDP authentication in the guest; the control protocol does not transmit a desktop password in its metadata.
+RPC 的最小生命周期是：
 
-A frontend implements an RDP client over `Display`. For testing with an existing RDP client, the CLI provides a loopback-only byte proxy:
-
-```sh
-./bin/sbx --socket /absolute/path/successbox/control.sock display --sandbox SANDBOX_ID --listen 127.0.0.1:13389
-```
-
-Connect the RDP client to that local port. The CLI does not launch it. This optional loopback listener belongs to the client; the daemon itself uses only its private control socket.
-
-## Wire behavior
-
-See [sandbox.proto](api/sandbox/v1/sandbox.proto). The [frontend API contract](api/README.md) covers sandbox RPCs and GatewaySession, including authentication, message examples, response correlation and current integration gaps.
-
-| RPC | Request and response |
+| RPC | 数据方向 |
 | --- | --- |
-| `Create` | Filesystem, environment, init, resource and desktop options → sandbox ID |
-| `Exec` | First `start { sandbox_id, argv, terminal? }`; then stdin, EOF, signal or resize → stdout/stderr followed by exit code |
-| `Display` | First `connect { id }`; then RDP bytes → `ready { protocol: RDP }` followed by RDP bytes |
-| `Close` | Sandbox ID → completion after shutdown and state cleanup |
+| `Create` | rootfs、环境、初始进程和资源选项 → sandbox ID |
+| `Exec` | 启动命令、stdin、resize、signal → stdout/stderr 和最终退出码 |
+| `Display` | 连接 sandbox → RDP 字节和键鼠输入 |
+| `Close` | sandbox ID → 停止进程并清理运行时状态 |
 
-Display data is the RDP wire protocol, not decoded pixel frames. Keyboard and pointer input travel in the same RDP stream. Each new `Display` call creates a connection to the selected sandbox's RDP service. Disconnecting a viewer does not stop the sandbox.
+协议细节、认证元数据和 GatewaySession 双向消息见 [api/README.md](api/README.md)。
 
-Closing an Exec request stream ends stdin. For an interactive PTY, use terminal control characters rather than `stdin_closed`. An RPC disconnect does not terminate the command: subsequent output is drained and discarded. Reattaching to that command's terminal is not implemented. `Close` ends the sandbox's processes; closing an absent ID succeeds. Lifecycle state is currently held in the daemon, with no restart recovery.
+## 桌面应用
 
-## Filesystems and resources
-
-Rootfs changes are temporary. gVisor uses its overlay filestore. Apple uses a read-only rootfs share with a private, sparse 4 GiB ext4 writable layer. Closing the sandbox removes its temporary state after the runtime shuts down.
-
-When preparing a rootfs directory from an archive on macOS, preserve its file modes, for example with `tar -xpf rootfs.tar --no-same-owner -C rootfs`. Otherwise paths such as `/tmp` can lose their required 1777 permissions. An ordinary macOS user cannot restore arbitrary Linux owner IDs; the desktop test image initializes its `demo` user's home ownership inside the guest overlay before starting the session services.
-
-Read-only mounts remain read-only. For writable mounts, gVisor applies its overlay; the direct Apple backend currently copies the supplied source into sandbox state before sharing it. Neither path writes the sandbox's changes back to the host source. Apple mount copies can be expensive for large source directories.
-
-The direct Apple backend defaults to 2 vCPUs and a 1 GiB container memory limit, with the SDK's 128 MiB guest overhead added to VM memory. Linux leaves limits unset unless requested; explicit limits require a privileged backend with working cgroups. The shared VM used by macOS gVisor mode has the separate defaults described above. These defaults are not benchmark settings.
-
-## Continuous integration
-
-Pull requests and pushes to `main` run Go race tests and builds on Linux amd64 (`ubuntu-latest`), Linux arm64 (`ubuntu-24.04-arm`), and macOS arm64 (`macos-26`). A separate `macos-26` job builds the Swift backend and generated protocol bindings, checks that `Package.resolved` stays unchanged, signs the binary with the virtualization entitlement, verifies its signature, and runs `--help`.
-
-The Go transport tests use in-process gRPC fixtures and a controlled runsc stand-in. The main Go transport tests do not boot a guest or perform desktop login. The separate Platform workflow boots Linux guests for worktree checks; desktop validation below was performed separately with compatible kernel, initfs, rootfs, and RDP client assets.
-
-## Verification scope
-
-The Go tests exercise binary display forwarding, half-close, cancellation before and after guest PID publication, relay startup failure, invalid stream metadata, and sandbox closure during Display. Go cross-compilation and a Swift build do not establish that a desktop image boots or that a graphical login works. Runtime checks must also use a compatible kernel/initfs/rootfs and an RDP client on the target host.
-
-Native VM checks on macOS 26.6.1 (arm64) have passed: Create, environment propagation, rootfs write isolation, a 512 KiB binary stdin/stdout roundtrip, separate stderr and exit status, concurrent Exec calls, repeated Close, and temporary state cleanup. An xrdp guest also passed RDP negotiation, TLS 1.3 handshake with verification against the test image's certificate, and disconnect/reconnect checks through `Display`.
-
-The Linux backends have been cross-compiled for arm64 and amd64. With the nested test environment's cgroup hierarchy prepared and restored by the test harness, arm64 runsc passed Create, environment propagation, rootfs write isolation, binary stdin/stdout, separate stderr and exit status, and Close/cleanup inside an Apple-managed Linux VM. Its xrdp guest passed RDP negotiation, certificate-verified TLS 1.3 handshakes, and display reconnect checks with `--network=none`. The Linux runtime was tested in that VM, without Docker wrapping runsc; amd64 currently has build coverage only.
-
-Both arm64 backends passed TTY checks for initial size, resize, interactive input, merged stderr, and SIGINT/exit status. Both also passed full graphical checks using a native FreeRDP 3.32.2 validation client: certificate pinning, password authentication, Xorg/Openbox session startup, a visible xterm window, 1024×768 framebuffer capture, and RDP mouse/keyboard input. The terminal received `hello` through RDP, and reading its output file through Exec independently confirmed the input. The Linux test's cgroup layout was restored and both test VMs closed successfully.
-
-The minimal test image still reports missing Openbox menu/PyXDG autostart components. These checks launch the terminal explicitly through Exec; desktop menus and autostart are not covered.
-
-Successbox covers sandbox control, RDP transport and host-side LLM/MCP gateway process management. See [gateway setup and validation](gateways/README.md). Agent configuration adaptation, the sandbox-to-gateway transport and the frontend are not yet integrated.
-
-## Lazy worktrees on Linux
-
-Build the custom runtime pair and helper from `runtime`, then enable it on the existing Linux service:
+桌面应用位于 `desktop/`，使用 Electron、React 和 TypeScript。它默认连接真实的 `GatewaySession`，支持 MCP 安装审批、敏感值弹窗、已保存密钥列表、删除和断线重连；尚未把账号管理、全局沙箱开关、持久运行记录和全部 Agent 启动路径接成完整产品流程。
 
 ```sh
-go build -o bin/successbox-gvisor ./cmd/successbox-gvisor
-CGO_ENABLED=0 go -C runtime build -o ../bin/worktree-runtime/runsc ./cmd/runsc
-CGO_ENABLED=0 go -C runtime build -o ../bin/worktree-runtime/gvisor-bin/gvisor_sentry ./cmd/sentry
-CGO_ENABLED=0 go -C runtime build -o ../bin/worktree-runtime/worktrees ./cmd/worktrees
-sudo ./bin/successbox-gvisor \
-  --socket /var/lib/successbox/control.sock \
-  --state /var/lib/successbox \
-  --runsc "$(pwd)/bin/worktree-runtime/runsc" \
-  --worktrees "$(pwd)/bin/worktree-runtime/worktrees"
+cd desktop
+npm install
+npm start
+npm run typecheck
+npm run lint
+npm run package
 ```
 
-Use the normal Create request with `rootfs` set to `/`, your working directory and the intended Linux UID/GID. This shares the Linux system as the sandbox's lower filesystem; runsc's overlay keeps ordinary writes private. There is no project-directory allowlist and no dedicated agent image. The `--worktrees` flag is optional; the existing backend behavior is unchanged when it is absent. The helper currently requires a rootful backend, but guest applications and repository workers can run as the user's UID/GID.
+真实模式需要先在宿主启动 `sbx gateways` 并配置控制 token。模拟界面必须显式设置 `SUCCESSBOX_DEMO=1`；真实服务未连接时不会静默返回模拟成功。更多配置和安全边界见 [desktop/README.md](desktop/README.md)。
 
-Accessing an existing Git repository creates one private copy and redirects pathname syscalls to it. The initial working directory is handled too. Create starts the helper, and Close first stops and deletes the guest, then publishes the private directories as detached worktrees in their original repositories. `git -C /original/project worktree list` shows the retained directories under `STATE/results/SANDBOX_ID/repo-*/worktree`. The original working files and branch are not overwritten. The per-sandbox `repositories.json` records the mapping; publication failures retain the files and make Close return an error.
+## 验证
 
-The backend uses a private mount namespace, a disposable root overlay and private overlays for writable user binds. Only the current sandbox’s result directory is mounted writable at `/run/successbox-results`. Runtime state is hidden with guest tmpfs mounts, including paths exposed through bind aliases. It contains control sockets, manifests and other sandboxes' private results and must not be served through the host-root lower layer. The public Create/Exec/Display/Close protocol is unchanged.
+```sh
+make check
+go test -race ./...
+```
 
-Reflinks are used where supported; otherwise the first access copies that repository's files. This does not snapshot the entire filesystem, but it is not per-file lazy CoW. Separate retention of non-Git files is not implemented in this step: those writes remain in the disposable overlay. See [runtime boundaries](runtime/README.md#worktree-policy) for Git and namespace limitations.
+CI 分别覆盖 Go race tests、Linux amd64/arm64 platform runtime、macOS Apple backend 和宿主 gateway tests。原生 VM 和 RDP 检查需要目标机器上的 kernel、initfs、rootfs、RDP 客户端及桌面依赖；编译通过或协议夹具通过，不能替代图形登录、鼠标键盘和关闭发布的完整验收。
 
-The native Platform CI now boots this custom runtime on Linux amd64 and arm64. It tests the low-level worktree probe and the existing RPC lifecycle with root and UID 1000 guests. `testdata/gvisor-worktrees.sh` is the reproducible service test; it accepts paths to `sbx`, the service, runsc, the helper and a new fixture directory. These checks run directly on Linux, without Docker.
+主要入口：
+
+| 边界 | 代码 |
+| --- | --- |
+| 公开协议 | `api/sandbox/v1/sandbox.proto`、`api/gateway/v1/gateway.proto` |
+| Linux 生命周期 | `cmd/successbox-gvisor/` |
+| Apple 启动 | `apple/Sources/SuccessboxApple/Main.swift` |
+| 网关宿主服务 | `cmd/sbx/`、`gateways/` |
+| gVisor 拦截与 worktree | `runtime/internal/platform/`、`runtime/cmd/worktrees/` |
+| Electron 前端 | `desktop/src/main/`、`desktop/src/preload/`、`desktop/src/renderer/` |
+| 原生集成检查 | `testdata/apple-gvisor.py`、`testdata/apple-gvisor-display.py`、`testdata/gvisor-worktrees.sh` |
+
+## 设计原则
+
+- 宿主原文件不直接回写；结果通过既有 tmpfs、私有仓库和 Close 发布流程处理。
+- Agent 使用受限网关身份，真实上游 API key 和 OAuth 留在宿主网关。
+- `Display` 是 RDP 双向字节流，不是截图轮询或 JSON 鼠标事件。
+- 关闭 viewer、关闭 sandbox、取消网关 pending 操作和撤销凭据是不同动作。
+- 尚未接通的账号、配置继承、非 Git 成果导出和完整桌面流程会明确显示为缺口，不返回模拟成功。
