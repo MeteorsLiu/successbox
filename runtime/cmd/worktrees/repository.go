@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"golang.org/x/sys/unix"
@@ -33,48 +34,216 @@ func git(directory string, args ...string) (string, error) {
 	return strings.TrimSpace(string(output)), nil
 }
 
-func prepare(source, destination string) error {
-	// --no-hardlinks keeps even Git objects independent of the source. Working
-	// files use reflinks when the backing filesystem supports them, never links.
-	if _, err := git("/", "clone", "--local", "--no-hardlinks", "--dissociate", "--no-checkout", "--", source, destination); err != nil {
-		return err
-	}
-	if err := copyTree(source, destination, true); err != nil {
-		return err
-	}
-	index, err := git(source, "rev-parse", "--path-format=absolute", "--git-path", "index")
+func prepare(source, destination, commonDirectory, guestRoot string, initialize bool) error {
+	common, err := git(source, "rev-parse", "--path-format=absolute", "--git-common-dir")
 	if err != nil {
 		return err
 	}
-	if _, err := os.Stat(index); err == nil {
-		if err := copyFile(index, filepath.Join(destination, ".git", "index")); err != nil {
+	gitdir, err := git(source, "rev-parse", "--absolute-git-dir")
+	if err != nil {
+		return err
+	}
+	box, err := os.OpenRoot(filepath.Dir(commonDirectory))
+	if err != nil {
+		return err
+	}
+	defer box.Close()
+	shared, err := box.OpenRoot(filepath.Base(commonDirectory))
+	if err != nil {
+		return err
+	}
+	defer shared.Close()
+	if initialize {
+		if err := copyGitMetadata(common, shared, true); err != nil {
 			return err
 		}
-	} else if !errors.Is(err, os.ErrNotExist) {
+		if err := copyFile(filepath.Join(common, "HEAD"), "HEAD", shared); err != nil {
+			return err
+		}
+		objects, err := git(source, "count-objects", "-v")
+		if err != nil {
+			return err
+		}
+		for _, line := range strings.Split(objects, "\n") {
+			if !strings.HasPrefix(line, "alternate: ") {
+				continue
+			}
+			path := strings.TrimPrefix(line, "alternate: ")
+			if strings.HasPrefix(path, "\"") {
+				path, err = strconv.Unquote(path)
+				if err != nil {
+					return err
+				}
+			}
+			// Copy recursive alternate stores once; no host object path reaches guest.
+			if err := filepath.WalkDir(path, func(file string, entry fs.DirEntry, err error) error {
+				if err != nil {
+					return err
+				}
+				rel, err := filepath.Rel(path, file)
+				if err != nil {
+					return err
+				}
+				if rel == "info/alternates" {
+					return nil
+				}
+				target := filepath.Join("objects", rel)
+				if entry.IsDir() {
+					return shared.MkdirAll(target, 0755)
+				}
+				if !entry.Type().IsRegular() {
+					return fmt.Errorf("non-regular Git object: %s", file)
+				}
+				if _, err := shared.Lstat(target); err == nil {
+					return nil
+				} else if !errors.Is(err, os.ErrNotExist) {
+					return err
+				}
+				return copyFile(file, target, shared)
+			}); err != nil {
+				return err
+			}
+		}
+	}
+	name := filepath.Base(filepath.Dir(destination))
+	adminPath := filepath.Join("worktrees", name)
+	if err := shared.MkdirAll("worktrees", 0755); err != nil {
 		return err
 	}
-	// Restore the user's repository configuration after preparation. No host
-	// Git command is subsequently run against this guest-writable metadata.
-	config, err := git(source, "rev-parse", "--path-format=absolute", "--git-path", "config")
+	if err := shared.Mkdir(adminPath, 0755); err != nil {
+		return err
+	}
+	admin, err := shared.OpenRoot(adminPath)
 	if err != nil {
 		return err
 	}
-	if err := copyFile(config, filepath.Join(destination, ".git", "config")); err != nil {
+	defer admin.Close()
+	if err := copyGitMetadata(gitdir, admin, false); err != nil {
 		return err
 	}
-	shared, err := filepath.Glob(filepath.Join(filepath.Dir(index), "sharedindex.*"))
-	if err != nil {
-		return err
-	}
-	for _, file := range shared {
-		if err := copyFile(file, filepath.Join(destination, ".git", filepath.Base(file))); err != nil {
+
+	// Git config editing only sees a new host temporary file, never config that
+	// an already-running guest could have changed in the shared repository.
+	for _, scope := range []struct {
+		root     *os.Root
+		name     string
+		source   string
+		settings [][2]string
+	}{
+		{shared, "config", filepath.Join(common, "config"), [][2]string{{"core.bare", "true"}, {"extensions.worktreeConfig", "true"}}},
+		{admin, "config.worktree", filepath.Join(gitdir, "config.worktree"), [][2]string{{"core.bare", "false"}}},
+	} {
+		if scope.root == shared && !initialize {
+			continue
+		}
+		data, err := os.ReadFile(scope.source)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		config, err := os.CreateTemp("", "successbox-git-config-")
+		if err != nil {
+			return err
+		}
+		defer os.Remove(config.Name())
+		_, writeErr := config.Write(data)
+		if err := errors.Join(writeErr, config.Close()); err != nil {
+			return err
+		}
+		// Remove a host worktree path even if the original checkout was relocated.
+		if _, err := git("/", "config", "--file", config.Name(), "--replace-all", "core.worktree", "."); err != nil {
+			return err
+		}
+		if _, err := git("/", "config", "--file", config.Name(), "--unset-all", "core.worktree"); err != nil {
+			return err
+		}
+		for _, setting := range scope.settings {
+			if _, err := git("/", "config", "--file", config.Name(), "--replace-all", setting[0], setting[1]); err != nil {
+				return err
+			}
+		}
+		if err := copyFile(config.Name(), scope.name, scope.root); err != nil {
 			return err
 		}
 	}
-	return nil
+	worktreePath, err := filepath.Rel(filepath.Dir(commonDirectory), destination)
+	if err != nil {
+		return err
+	}
+	if err := box.MkdirAll(worktreePath, 0755); err != nil {
+		return err
+	}
+	worktree, err := box.OpenRoot(worktreePath)
+	if err != nil {
+		return err
+	}
+	defer worktree.Close()
+	forward := filepath.Join(guestRoot, filepath.Base(commonDirectory), adminPath)
+	backward := filepath.Join(guestRoot, worktreePath, ".git")
+	// getcwd exposes the original logical path. Git resolves .git references
+	// against that path, so relative references to the private directory fail.
+	// Use the already-mounted guest results path in both directions instead.
+	if err := admin.WriteFile("commondir", []byte("../..\n"), 0644); err != nil {
+		return err
+	}
+	if err := admin.WriteFile("gitdir", []byte(backward+"\n"), 0644); err != nil {
+		return err
+	}
+	if err := worktree.WriteFile(".git", []byte("gitdir: "+forward+"\n"), 0644); err != nil {
+		return err
+	}
+	return copyTree(source, worktree, true)
 }
 
-func copyFile(source, destination string) error {
+// Copy common data once, and each worktree's HEAD/index/config separately.
+// No Git command evaluates private metadata while another guest can edit it.
+func copyGitMetadata(source string, destination *os.Root, shared bool) error {
+	return filepath.WalkDir(source, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(source, path)
+		if err != nil {
+			return err
+		}
+		if rel == "." {
+			return nil
+		}
+		if rel == "worktrees" || rel == "gitdir" || rel == "commondir" || rel == "objects/info/alternates" {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		// These directories contain both common and per-worktree records.
+		if rel == "refs" || rel == "logs" || rel == "info" {
+			return destination.MkdirAll(rel, 0755)
+		}
+		top := strings.SplitN(rel, "/", 2)[0]
+		common := false
+		switch top {
+		case "objects", "refs", "logs", "info", "config", "packed-refs", "shallow", "hooks", "description", "rr-cache", "modules", "branches", "remotes":
+			common = true
+		}
+		if rel == "logs/HEAD" || rel == "info/sparse-checkout" || within(rel, "refs/bisect") || within(rel, "refs/worktree") || within(rel, "refs/rewritten") {
+			common = false
+		}
+		if common != shared {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if entry.IsDir() {
+			return destination.MkdirAll(rel, 0755)
+		}
+		if !entry.Type().IsRegular() {
+			return fmt.Errorf("Git metadata contains unsupported file %s (%s)", path, entry.Type())
+		}
+		return copyFile(path, rel, destination)
+	})
+}
+
+func copyFile(source, destination string, root *os.Root) error {
 	input, err := os.OpenFile(source, os.O_RDONLY|unix.O_NOFOLLOW, 0)
 	if err != nil {
 		return err
@@ -87,7 +256,7 @@ func copyFile(source, destination string) error {
 	if !info.Mode().IsRegular() {
 		return fmt.Errorf("not a regular file: %s", source)
 	}
-	output, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|unix.O_NOFOLLOW, info.Mode().Perm())
+	output, err := root.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|unix.O_NOFOLLOW, info.Mode().Perm())
 	if err != nil {
 		return err
 	}
@@ -99,12 +268,12 @@ func copyFile(source, destination string) error {
 		err = output.Chmod(info.Mode().Perm())
 	}
 	if err == nil {
-		err = os.Chtimes(destination, info.ModTime(), info.ModTime())
+		err = root.Chtimes(destination, info.ModTime(), info.ModTime())
 	}
 	return errors.Join(err, output.Close())
 }
 
-func copyTree(source, destination string, skipGit bool) error {
+func copyTree(source string, destination *os.Root, skipGit bool) error {
 	var directories []struct {
 		path string
 		mode os.FileMode
@@ -126,7 +295,7 @@ func copyTree(source, destination string, skipGit bool) error {
 			}
 			return nil
 		}
-		target := filepath.Join(destination, rel)
+		target := rel
 		info, err := entry.Info()
 		if err != nil {
 			return err
@@ -138,15 +307,15 @@ func copyTree(source, destination string, skipGit bool) error {
 				path string
 				mode os.FileMode
 			}{target, mode})
-			return os.MkdirAll(target, mode|0700)
+			return destination.MkdirAll(target, mode|0700)
 		case entry.Type()&os.ModeSymlink != 0:
 			link, err := os.Readlink(path)
 			if err != nil {
 				return err
 			}
-			return os.Symlink(link, target)
+			return destination.Symlink(link, target)
 		case entry.Type().IsRegular():
-			return copyFile(path, target)
+			return copyFile(path, target, destination)
 		default:
 			return fmt.Errorf("repository contains unsupported file %s (%s)", path, entry.Type())
 		}
@@ -155,7 +324,7 @@ func copyTree(source, destination string, skipGit bool) error {
 		return err
 	}
 	for i := len(directories) - 1; i >= 0; i-- {
-		if err := os.Chmod(directories[i].path, directories[i].mode); err != nil {
+		if err := destination.Chmod(directories[i].path, directories[i].mode); err != nil {
 			return err
 		}
 	}
@@ -177,18 +346,41 @@ func publish(repo *repository) error {
 	// Read HEAD, index and object files through a confined root, then register
 	// the finished directory through the original repository's Git metadata.
 	privateGit := filepath.Join(repo.Directory, ".git")
-	info, err := os.Lstat(privateGit)
+	box, err := os.OpenRoot(filepath.Dir(repo.CommonDirectory))
 	if err != nil {
 		return err
 	}
-	if !info.IsDir() {
-		return errors.New("private .git is not a directory; repository retained")
+	defer box.Close()
+	common, err := box.OpenRoot(filepath.Base(repo.CommonDirectory))
+	if err != nil {
+		return err
 	}
-	root, err := os.OpenRoot(privateGit)
+	defer common.Close()
+	adminPath := filepath.Join("worktrees", filepath.Base(filepath.Dir(repo.Directory)))
+	root, err := common.OpenRoot(adminPath)
 	if err != nil {
 		return err
 	}
 	defer root.Close()
+	worktreePath, err := filepath.Rel(filepath.Dir(repo.CommonDirectory), repo.Directory)
+	if err != nil {
+		return err
+	}
+	info, err := box.Lstat(filepath.Join(worktreePath, ".git"))
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return errors.New("private .git is not a regular file; repository retained")
+	}
+	gitfile, err := box.ReadFile(filepath.Join(worktreePath, ".git"))
+	if err != nil {
+		return err
+	}
+	forward := filepath.Join(repo.GuestRoot, filepath.Base(repo.CommonDirectory), adminPath)
+	if string(gitfile) != "gitdir: "+forward+"\n" {
+		return errors.New("private .git reference changed; repository retained")
+	}
 	head, err := root.ReadFile("HEAD")
 	if err != nil {
 		return err
@@ -202,7 +394,11 @@ func publish(repo *repository) error {
 		if !strings.HasPrefix(ref, "refs/") || filepath.Clean(ref) != ref {
 			return errors.New("invalid Git HEAD reference")
 		}
-		value, readErr := root.ReadFile(ref)
+		refs := common
+		if within(ref, "refs/bisect") || within(ref, "refs/worktree") || within(ref, "refs/rewritten") {
+			refs = root
+		}
+		value, readErr := refs.ReadFile(ref)
 		if readErr == nil {
 			commit = strings.TrimSpace(string(value))
 			continue
@@ -210,7 +406,7 @@ func publish(repo *repository) error {
 		if !errors.Is(readErr, os.ErrNotExist) {
 			return readErr
 		}
-		packed, readErr := root.ReadFile("packed-refs")
+		packed, readErr := common.ReadFile("packed-refs")
 		if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
 			return readErr
 		}
@@ -237,66 +433,68 @@ func publish(repo *repository) error {
 	if err != nil {
 		return err
 	}
-	entries, err := fs.ReadDir(root.FS(), "objects")
-	if err != nil {
-		return err
-	}
-	for _, entry := range entries {
-		name := entry.Name()
-		if name == "info" {
-			continue
-		} // Never import alternates or configuration.
-		if !entry.IsDir() {
-			return fmt.Errorf("unexpected object database entry %q", name)
-		}
-		if name != "pack" {
-			if len(name) != 2 {
-				return fmt.Errorf("unexpected object directory %q", name)
-			}
-			if _, err := hex.DecodeString(name); err != nil {
-				return err
-			}
-		}
-		children, err := fs.ReadDir(root.FS(), "objects/"+name)
+	if !repo.skipObjects {
+		entries, err := fs.ReadDir(common.FS(), "objects")
 		if err != nil {
 			return err
 		}
-		for _, child := range children {
-			filename := child.Name()
-			if name == "pack" {
-				stem, ext := strings.TrimSuffix(filename, filepath.Ext(filename)), filepath.Ext(filename)
-				if (ext != ".pack" && ext != ".idx" && ext != ".rev") || !strings.HasPrefix(stem, "pack-") || !validObjectID(strings.TrimPrefix(stem, "pack-")) {
+		for _, entry := range entries {
+			name := entry.Name()
+			if name == "info" {
+				continue
+			} // Never import alternates or configuration.
+			if !entry.IsDir() {
+				return fmt.Errorf("unexpected object database entry %q", name)
+			}
+			if name != "pack" {
+				if len(name) != 2 {
+					return fmt.Errorf("unexpected object directory %q", name)
+				}
+				if _, err := hex.DecodeString(name); err != nil {
+					return err
+				}
+			}
+			children, err := fs.ReadDir(common.FS(), "objects/"+name)
+			if err != nil {
+				return err
+			}
+			for _, child := range children {
+				filename := child.Name()
+				if name == "pack" {
+					stem, ext := strings.TrimSuffix(filename, filepath.Ext(filename)), filepath.Ext(filename)
+					if (ext != ".pack" && ext != ".idx" && ext != ".rev") || !strings.HasPrefix(stem, "pack-") || !validObjectID(strings.TrimPrefix(stem, "pack-")) {
+						continue
+					}
+				} else if !validObjectID(name + filename) {
+					return fmt.Errorf("invalid loose object %q", filename)
+				}
+				if !child.Type().IsRegular() {
+					return errors.New("non-regular Git object")
+				}
+				rel := "objects/" + name + "/" + filename
+				input, err := common.Open(rel)
+				if err != nil {
+					return err
+				}
+				target := filepath.Join(objects, name, filename)
+				if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+					input.Close()
+					return err
+				}
+				output, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL|unix.O_NOFOLLOW, 0444)
+				if errors.Is(err, os.ErrExist) {
+					input.Close()
 					continue
 				}
-			} else if !validObjectID(name + filename) {
-				return fmt.Errorf("invalid loose object %q", filename)
-			}
-			if !child.Type().IsRegular() {
-				return errors.New("non-regular Git object")
-			}
-			rel := "objects/" + name + "/" + filename
-			input, err := root.Open(rel)
-			if err != nil {
-				return err
-			}
-			target := filepath.Join(objects, name, filename)
-			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
-				input.Close()
-				return err
-			}
-			output, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL|unix.O_NOFOLLOW, 0444)
-			if errors.Is(err, os.ErrExist) {
-				input.Close()
-				continue
-			}
-			if err != nil {
-				input.Close()
-				return err
-			}
-			_, err = io.Copy(output, input)
-			err = errors.Join(err, input.Close(), output.Close())
-			if err != nil {
-				return err
+				if err != nil {
+					input.Close()
+					return err
+				}
+				_, err = io.Copy(output, input)
+				err = errors.Join(err, input.Close(), output.Close())
+				if err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -310,7 +508,7 @@ func publish(repo *repository) error {
 	if _, err := git(repo.Source, "worktree", "add", "--detach", "--no-checkout", registration, commit); err != nil {
 		return err
 	}
-	gitfile, err := os.ReadFile(filepath.Join(registration, ".git"))
+	gitfile, err = os.ReadFile(filepath.Join(registration, ".git"))
 	if err != nil {
 		return err
 	}
