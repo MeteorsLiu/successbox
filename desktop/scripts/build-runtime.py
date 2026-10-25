@@ -133,7 +133,13 @@ with tempfile.TemporaryDirectory(prefix='successbox-build-') as scratch:
         (destination / 'linux-dependencies.json').write_text(json.dumps(dependencies))
         with package.open('rb') as stream:
             (destination / 'chatgpt-download.sha256').write_text(hashlib.file_digest(stream, 'sha256').hexdigest() + '\n')
-    shutil.copytree(repo / 'desktop/scripts/guest', linux / 'scripts')
+    (linux / 'scripts').mkdir()
+    shutil.copy2(repo / 'desktop/scripts/guest/session.py', linux / 'scripts/session.py')
+    if system == 'linux':
+        subprocess.run(['npm', 'install', '--prefix', linux / 'claude', '--omit=dev', '@anthropic-ai/claude-code@2.1.310'], check=True)
+        shutil.copy2(shutil.which('node'), linux / 'node')
+        subprocess.run([linux / 'node', linux / 'claude/node_modules/@anthropic-ai/claude-code/cli.js', '--version'], check=True)
+
     # Build-time provenance is public; it contains no host configuration.
     versions = {'cliproxy': '8.0.42', 'bifrost': '2.3.2', 'freerdp': '3.32.2',
         'commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=repo, text=True).strip()}
