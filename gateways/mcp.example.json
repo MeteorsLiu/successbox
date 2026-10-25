@@ -1,0 +1,38 @@
+{
+  "disable_onboarding": true,
+  "client": {
+    "enable_logging": false,
+    "disable_content_logging": true,
+    "enforce_governance_header": true,
+    "mcp_disable_auto_tool_inject": true
+  },
+  "mcp": {
+    "client_configs": [{
+      "name": "project-tools",
+      "connection_type": "http",
+      "connection_string": "https://mcp.example.invalid/mcp",
+      "auth_type": "headers",
+      "headers": {"Authorization": "Bearer REPLACE_WITH_UPSTREAM_MCP_KEY"},
+      "tools_to_execute": ["REPLACE_WITH_TOOL_NAME"],
+      "allow_by_default": false,
+      "require_public_target": true
+    }]
+  },
+  "governance": {
+    "auth_config": {
+      "is_enabled": true,
+      "admin_username": "successbox",
+      "admin_password": "REPLACE_WITH_ADMIN_PASSWORD"
+    },
+    "virtual_keys": [{
+      "id": "successbox-session",
+      "name": "successbox-session",
+      "value": "sk-bf-REPLACE_WITH_MCP_GATEWAY_KEY",
+      "is_active": true,
+      "mcp_configs": [{
+        "mcp_client_name": "project-tools",
+        "tools_to_execute": ["REPLACE_WITH_TOOL_NAME"]
+      }]
+    }]
+  }
+}

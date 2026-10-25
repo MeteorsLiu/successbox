@@ -1,0 +1,45 @@
+name: Gateways
+
+on:
+  pull_request:
+    paths:
+      - 'cmd/sbx/**'
+      - 'gateways/**'
+      - 'testdata/gateways/**'
+      - '.github/workflows/gateways.yml'
+      - 'go.mod'
+      - 'go.sum'
+  push:
+    branches: [main]
+    paths:
+      - 'cmd/sbx/**'
+      - 'gateways/**'
+      - 'testdata/gateways/**'
+      - '.github/workflows/gateways.yml'
+      - 'go.mod'
+      - 'go.sum'
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Gateways (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm, macos-26]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Build client and install native gateways
+        run: |
+          go build -o "$RUNNER_TEMP/sbx" ./cmd/sbx
+          python3 testdata/gateways/install.py "$RUNNER_TEMP/gateways"
+      - name: Verify protocols, credentials and shutdown
+        run: python3 testdata/gateways/run.py "$RUNNER_TEMP/sbx" "$RUNNER_TEMP/gateways/cli-proxy-api" "$RUNNER_TEMP/gateways/bifrost-http"
