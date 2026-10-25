@@ -70,3 +70,9 @@ The Successbox plugin injects sensitive-field and MCP installation instructions 
 The policy explains `$PRIVACY_PROTECT_<field_name>` and directs installation through `request_mcp_install`. Actual MCP registration, credential resolution and client catalog refresh are provided by the subsequent gateway-service change; these instructions do not create callable tools or perform content redaction.
 
 The native fixture checks twelve JSON/streaming cases covering Messages, Responses, Responses Lite, Code Mode, and requests without tools.
+
+## GatewaySession contract
+
+The host control protocol is defined in [gateway.proto](../api/gateway/v1/gateway.proto). One bidirectional `GatewaySession` RPC carries correlated requests, replies and events for secret CRUD, missing-value input and MCP installation approval. Authentication determines the caller identity; messages do not declare a role. Installation requests contain no MCP ID or secret value.
+
+This change adds Go bindings and the Swift `GatewayProtocol` generation target. The service implementation follows in the next PR.

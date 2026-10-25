@@ -1,0 +1,265 @@
+syntax = "proto3";
+
+package successbox.gateway.v1;
+
+option go_package = "github.com/MeteorsLiu/successbox/api/gateway/v1;gatewayv1";
+
+import "google/protobuf/timestamp.proto";
+
+enum MCPSecretChange {
+  MCP_SECRET_CHANGE_UNSPECIFIED = 0;
+  MCP_SECRET_CREATED = 1;
+  MCP_SECRET_UPDATED = 2;
+  MCP_SECRET_DELETED = 3;
+  MCP_SECRET_USED = 4;
+}
+enum MCPInstallChange {
+  MCP_INSTALL_CHANGE_UNSPECIFIED = 0;
+  MCP_INSTALL_REQUESTED = 1;
+  // User approval is distinct from client tool availability (section 5.10).
+  MCP_INSTALL_APPROVED = 2;
+  MCP_INSTALL_REJECTED = 3;
+  MCP_INSTALL_FAILED = 4;
+  MCP_INSTALL_CANCELLED = 5;
+}
+
+service GatewayManagementService {
+  rpc GatewaySession(stream GatewayClientMessage)
+      returns (stream GatewayServerMessage);
+}
+
+message GatewayClientMessage {
+  string correlation_id = 1;
+  oneof body {
+    ClientRequest request = 2;
+    ClientResponse response = 3;
+  }
+}
+
+message GatewayServerMessage {
+  string correlation_id = 1;
+  string event_id = 2;
+  oneof body {
+    ServerRequest request = 3;
+    ServerResponse response = 4;
+    ServerEvent event = 5;
+  }
+}
+
+message ClientRequest {
+  oneof body {
+    OpenSession open_session = 1;
+    ResumeSession resume_session = 2;
+    ResolveSecret resolve_secret = 3;
+    CreateMCPSecret create_mcp_secret = 4;
+    UpdateMCPSecret update_mcp_secret = 5;
+    GetMCPSecret get_mcp_secret = 6;
+    ListMCPSecrets list_mcp_secrets = 7;
+    DeleteMCPSecret delete_mcp_secret = 8;
+    RequestMCPInstall request_mcp_install = 9;
+  }
+}
+
+message ClientResponse {
+  oneof body {
+    ProvideSecret provide_secret = 1;
+    CancelSecret cancel_secret = 2;
+    DecideMCPInstall decide_mcp_install = 3;
+  }
+}
+
+message ServerRequest {
+  oneof body {
+    SecretInputRequest secret_input = 1;
+    MCPInstallApprovalRequest mcp_install_approval = 2;
+  }
+}
+
+message ServerResponse {
+  oneof body {
+    SessionOpened session_opened = 1;
+    SecretValue secret_value = 2;
+    MCPSecretRecord secret_record = 3;
+    MCPSecretList secret_list = 4;
+    MCPSecretMutationAccepted mutation_accepted = 5;
+    MCPInstallSubmitted mcp_install_submitted = 6;
+    MCPInstallDecisionAccepted mcp_install_decision_accepted = 7;
+    OperationError operation_error = 8;
+  }
+}
+
+message ServerEvent {
+  oneof body {
+    MCPSecretChanged secret_changed = 1;
+    MCPInstallChanged mcp_install_changed = 2;
+  }
+}
+
+message OpenSession {
+  string sandbox_id = 1;
+  string client_version = 2;
+}
+
+message ResumeSession {
+  string last_event_id = 1;
+  bool replay_pending = 2;
+}
+
+message ResolveSecret {
+  string operation_id = 1;
+  string sandbox_id = 2;
+  string mcp_id = 3;
+  string mcp_name = 4;
+  string tool_name = 5;
+  string field_name = 6;
+  string placeholder = 7;
+  int64 timeout_ms = 8;
+}
+
+message CreateMCPSecret {
+  string sandbox_id = 1;
+  string mcp_id = 2;
+  string mcp_name = 3;
+  string field_name = 4;
+  bytes secret_value = 5;
+}
+
+message UpdateMCPSecret {
+  string sandbox_id = 1;
+  string mcp_id = 2;
+  string mcp_name = 3;
+  string field_name = 4;
+  bytes secret_value = 5;
+}
+
+message GetMCPSecret {
+  string sandbox_id = 1;
+  string mcp_id = 2;
+  string field_name = 3;
+}
+
+message ListMCPSecrets {
+  string sandbox_id = 1;
+  string mcp_id = 2;
+}
+
+message DeleteMCPSecret {
+  string sandbox_id = 1;
+  string mcp_id = 2;
+  string field_name = 3;
+}
+message RequestMCPInstall {
+  string operation_id = 1;
+  string sandbox_id = 2;
+  reserved 3;
+  reserved "mcp_id";
+  string mcp_name = 4;
+  string transport = 5;
+  string endpoint = 6;
+  repeated string requested_tools = 7;
+  repeated string credential_fields = 8;
+}
+
+message DecideMCPInstall {
+  string operation_id = 1;
+  string request_id = 2;
+  bool approve = 3;
+  string decision_reason = 4;
+}
+
+message ProvideSecret {
+  string operation_id = 1;
+  string sandbox_id = 2;
+  string mcp_id = 3;
+  string mcp_name = 4;
+  string field_name = 5;
+  bytes secret_value = 6;
+}
+
+message CancelSecret {
+  string operation_id = 1;
+  string reason = 2;
+}
+
+message SessionOpened {
+  string session_id = 1;
+  string sandbox_id = 2;
+}
+
+message SecretInputRequest {
+  string operation_id = 1;
+  string sandbox_id = 2;
+  string mcp_id = 3;
+  string mcp_name = 4;
+  string field_name = 5;
+  string placeholder = 6;
+}
+
+message SecretValue {
+  string operation_id = 1;
+  bytes value = 2;
+}
+
+message MCPSecretRecord {
+  string sandbox_id = 1;
+  string mcp_id = 2;
+  string mcp_name = 3;
+  string field_name = 4;
+  bytes secret_value = 5;
+  bool has_value = 6;
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp updated_at = 8;
+  google.protobuf.Timestamp last_used_at = 9;
+}
+
+message MCPSecretList {
+  repeated MCPSecretRecord records = 1;
+}
+
+message MCPSecretMutationAccepted {
+  MCPSecretChange change = 1;
+  MCPSecretRecord record = 2;
+}
+
+message MCPSecretChanged {
+  MCPSecretChange change = 1;
+  MCPSecretRecord record = 2;
+}
+message MCPInstallApprovalRequest {
+  string request_id = 1;
+  string sandbox_id = 2;
+  reserved 3;
+  reserved "mcp_id";
+  string mcp_name = 4;
+  string transport = 5;
+  string endpoint = 6;
+  repeated string requested_tools = 7;
+  repeated string credential_fields = 8;
+}
+
+message MCPInstallSubmitted {
+  string operation_id = 1;
+  string request_id = 2;
+  MCPInstallChange change = 3;
+}
+
+message MCPInstallDecisionAccepted {
+  string request_id = 1;
+  MCPInstallChange change = 2;
+}
+
+message MCPInstallChanged {
+  MCPInstallChange change = 1;
+  string request_id = 2;
+  string sandbox_id = 3;
+  // Empty until an actual MCP binding exists; never supplied in an install request.
+  string mcp_id = 4;
+  string mcp_name = 5;
+  string reason = 6;
+}
+
+message OperationError {
+  string operation_id = 1;
+  string code = 2;
+  string message = 3;
+}

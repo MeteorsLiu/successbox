@@ -1,7 +1,7 @@
 .PHONY: generate go apple runtime check
 
 generate:
-	PATH="$(CURDIR)/.tools/bin:$$PATH" protoc --go_out=. --go_opt=paths=source_relative --go-grpc_out=. --go-grpc_opt=paths=source_relative api/sandbox/v1/sandbox.proto
+	PATH="$(CURDIR)/.tools/bin:$$PATH" protoc --go_out=. --go_opt=paths=source_relative --go-grpc_out=. --go-grpc_opt=paths=source_relative api/sandbox/v1/sandbox.proto api/gateway/v1/gateway.proto
 
 go:
 	mkdir -p bin
