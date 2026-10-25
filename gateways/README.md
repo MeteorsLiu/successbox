@@ -1,5 +1,7 @@
 # LLM and MCP gateways
 
+The [frontend API contract](../api/README.md) documents the GatewaySession connection, message directions, credential CRUD, installation approvals and reconnect behavior.
+
 `sbx gateways` starts native CLIProxyAPI and Bifrost processes in the trusted host environment. CLIProxyAPI owns model protocols and upstream authentication; the Successbox scheduler plugin binds each accepted client token to the configured Claude/Codex account selector (`base_url#config_index`). Bifrost owns MCP connections, tool discovery and forwarding. Upstream credentials stay in their host-side configuration and authentication stores. The launcher does not rewrite those files or maintain a second credential database.
 
 This step provides host-side gateway process management, the host HTTP/2 GatewaySession control plane, and protocol validation. It does not yet connect the sandbox network, rewrite Agent configuration copies, implement the sensitive-value dialog UI, or apply content redaction. Both sandbox backends still use their existing network configuration. A successful gateway test is not an end-to-end Claude Code/Codex session.
