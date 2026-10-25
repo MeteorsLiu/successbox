@@ -39,7 +39,8 @@ with tempfile.TemporaryDirectory(prefix='successbox-build-') as scratch:
     plugin.parent.mkdir(parents=True)
     subprocess.run(['go', 'build', '-trimpath', '-buildmode=c-shared', '-o', plugin, '.'], cwd=repo / 'gateways/cliproxy', check=True)
     plugin.with_suffix('.h').unlink()
-    shutil.copy2(repo / 'LICENSE', notices / 'Successbox.txt')
+    shutil.copy2(repo / 'desktop/LICENSE', notices / 'Successbox-desktop.txt')
+    shutil.copy2(repo / 'runtime/third_party/sandbox-LICENSE', notices / 'Sandbox.txt')
     shutil.copy2(repo / 'gateways/cliproxy/LICENSE.cliproxy', notices / 'CLIProxyAPI.txt')
     subprocess.run(['git', 'clone', '--quiet', '--depth', '1', '--branch', '3.32.2', 'https://github.com/FreeRDP/FreeRDP.git', scratch / 'freerdp'], check=True)
     revision = subprocess.check_output(['git', '-C', scratch / 'freerdp', 'rev-parse', 'HEAD'], text=True).strip()
@@ -140,6 +141,23 @@ with tempfile.TemporaryDirectory(prefix='successbox-build-') as scratch:
         shutil.copy2(shutil.which('node'), linux / 'node')
         subprocess.run([linux / 'node', linux / 'claude/node_modules/@anthropic-ai/claude-code/cli.js', '--version'], check=True)
 
+    # Include the notices from the exact source dependencies used by the build.
+    for module_root in (repo, repo / 'runtime', repo / 'gateways/cliproxy'):
+        data = subprocess.check_output(['go', 'list', '-m', '-json', 'all'], cwd=module_root, text=True)
+        decoder = json.JSONDecoder()
+        while data.strip():
+            module, count = decoder.raw_decode(data.lstrip())
+            data = data.lstrip()[count:]
+            if not module.get('Dir'): continue
+            label = module['Path'].replace('/', '_')
+            for name in ('LICENSE', 'LICENSE.txt', 'LICENSE.md', 'NOTICE', 'COPYING', 'COPYRIGHT'):
+                source = Path(module['Dir']) / name
+                if source.is_file(): shutil.copy2(source, notices / (label + '-' + name))
+    if system == 'darwin':
+        for dependency in (repo / '.build/checkouts').iterdir():
+            for name in ('LICENSE', 'LICENSE.txt', 'LICENSE.md', 'NOTICE'):
+                source = dependency / name
+                if source.is_file(): shutil.copy2(source, notices / (dependency.name + '-' + name))
     # Build-time provenance is public; it contains no host configuration.
     versions = {'cliproxy': '8.0.42', 'bifrost': '2.3.2', 'freerdp': '3.32.2',
         'commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=repo, text=True).strip()}
