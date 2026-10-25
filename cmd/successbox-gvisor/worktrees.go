@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -58,7 +59,7 @@ func (s *server) startWorktrees(ctx context.Context, id, dir string, log *os.Fil
 	}
 	defer read.Close()
 	defer write.Close()
-	cmd := exec.Command(s.worktreeHelper, "--socket", filepath.Join(dir, "worktrees.sock"), "--bundle", dir, "--state", results, "--ready-fd", "3")
+	cmd := exec.Command(s.worktreeHelper, "--socket", filepath.Join(dir, "worktrees.sock"), "--bundle", filepath.Join(dir, "worktrees"), "--state", results, "--ready-fd", "3")
 	cmd.Stdout, cmd.Stderr = log, log
 	cmd.ExtraFiles = []*os.File{write}
 	if err := cmd.Start(); err != nil {
@@ -75,3 +76,8 @@ func (s *server) startWorktrees(ctx context.Context, id, dir string, log *os.Fil
 	}
 	return cmd, nil
 }
+
+// The Linux implementation owns host mount setup. The command remains buildable
+// on macOS, where main directs callers to the Apple backend.
+var worktreeNamespace = func() error { return errors.New("worktrees require Linux") }
+var worktreeMounts = func(*specs.Spec, string) (func() error, error) { return nil, errors.New("worktrees require Linux") }

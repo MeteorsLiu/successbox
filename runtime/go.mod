@@ -1,4 +1,4 @@
-module github.com/MeteorsLiu/successbox/experimental/platform
+module github.com/MeteorsLiu/successbox/runtime
 
 go 1.27.1
 

@@ -20,7 +20,7 @@ func main() {
 	socket := flag.String("socket", "", "path to the private Unix socket")
 	state := flag.String("state", "", "directory for this service's sandbox state")
 	binary := flag.String("runsc", "runsc", "runsc executable")
-	worktrees := flag.String("worktrees", "", "experimental worktrees helper executable")
+	worktrees := flag.String("worktrees", "", "worktree policy executable")
 	rdpPort := flag.Uint("rdp-port", 3389, "RDP port inside desktop sandboxes")
 	flag.Parse()
 	if runtime.GOOS != "linux" {
@@ -28,6 +28,11 @@ func main() {
 	}
 	if *socket == "" || *state == "" || *rdpPort == 0 || *rdpPort > 65535 {
 		log.Fatal("--socket, --state and a valid --rdp-port are required")
+	}
+	if *worktrees != "" {
+		if err := worktreeNamespace(); err != nil {
+			log.Fatal(err)
+		}
 	}
 	path, err := exec.LookPath(*binary)
 	if err != nil {
@@ -53,7 +58,7 @@ func main() {
 	}
 	if *worktrees != "" {
 		if os.Geteuid() != 0 {
-			log.Fatal("experimental worktrees currently require a rootful backend")
+			log.Fatal("worktrees require a rootful backend")
 		}
 		*worktrees, err = exec.LookPath(*worktrees)
 		if err != nil {

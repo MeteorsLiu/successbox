@@ -2,13 +2,14 @@
 
 // Adapted from xgo-dev/sandbox/sentry/memory_linux.go under Apache-2.0.
 // This version is pure Go and releases retained mappings when their task exits.
-package observe
+package platform
 
 import (
 	"errors"
 	"sync"
 	"unsafe"
 
+	"github.com/MeteorsLiu/successbox/runtime/internal/intercept"
 	"golang.org/x/sys/unix"
 
 	"gvisor.dev/gvisor/pkg/context"
@@ -31,6 +32,7 @@ type syscallMemoryRegion struct {
 }
 
 type syscallMemory struct {
+	result  *intercept.Result
 	active  bool
 	task    *kernel.Task
 	ctx     context.Context
@@ -164,7 +166,17 @@ func installSyscallMemory() {
 					m := memoryCalls.pending[t]
 					delete(memoryCalls.pending, t)
 					memoryCalls.Unlock()
-					value, control, err := fn(t, number, args)
+					var value uintptr
+					var control *kernel.SyscallControl
+					var err error
+					if m != nil && m.result != nil {
+						value = uintptr(m.result.Value)
+						if m.result.Errno != 0 {
+							err = linuxerr.ErrorFromUnix(unix.Errno(m.result.Errno))
+						}
+					} else {
+						value, control, err = fn(t, number, args)
+					}
 					if m != nil && !linuxerr.IsRestartError(err) {
 						if releaseErr := finishSyscallMemory(m); releaseErr != nil {
 							t.Warningf("releasing syscall memory: %v", releaseErr)

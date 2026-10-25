@@ -34,15 +34,22 @@ for uid in 0 1000; do
  printf original > "$repo/file"
  git -C "$repo" add .
  git -C "$repo" -c user.name=Test -c user.email=test@example.invalid commit -qm initial
- chown -R "$uid:$uid" "$repo"
- printf '{"rootfs":"/","workingDir":"%s","user":{"uid":%s,"gid":%s}}\n' "$repo" "$uid" "$uid" > "$stage/config.json"
+ plain=$stage/plain-$uid
+ readonly=$stage/readonly-$uid
+ mkdir -p "$plain" "$readonly"
+ printf original > "$plain/file"
+ printf readonly > "$readonly/file"
+ chown -R "$uid:$uid" "$repo" "$plain"
+ printf '{"rootfs":"/","workingDir":"%s","user":{"uid":%s,"gid":%s},"mounts":[{"source":"%s","destination":"/workspace"},{"source":"%s","destination":"/single-file"},{"source":"%s","destination":"/workspace/readonly","readOnly":true},{"source":"%s","destination":"/state-alias"}]}\n' "$repo" "$uid" "$uid" "$plain" "$plain/file" "$readonly" "$stage/state" > "$stage/config.json"
  box=$("$client" --socket "$stage/control.sock" create "$stage/config.json")
- "$client" --socket "$stage/control.sock" exec --sandbox "$box" -- /bin/sh -c 'set -eu; test "$(cat file)" = original; printf guest > file; git diff --stat; test ! -e "$1/state/results"' probe "$stage"
+ "$client" --socket "$stage/control.sock" exec --sandbox "$box" -- /bin/sh -c 'set -eu; test "$(cat file)" = original; printf guest > file; git diff --stat; test ! -e "$1/state/results"; test ! -e /state-alias/results; printf changed > /workspace/file; printf separate > /single-file; test "$(cat /workspace/file)" = changed; test "$(cat /workspace/readonly/file)" = readonly; if (printf wrong > /workspace/readonly/file) 2>/dev/null; then exit 1; fi' probe "$stage"
  test "$(cat "$repo/file")" = original
+ test "$(cat "$plain/file")" = original
+ test "$(cat "$readonly/file")" = readonly
  "$client" --socket "$stage/control.sock" close "$box"
  box=
  git -c safe.directory="$repo" -C "$repo" worktree list --porcelain
  count=$(git -c safe.directory="$repo" -C "$repo" worktree list --porcelain | grep -c '^worktree ')
  test "$count" = 2
  done
-printf 'RPC worktrees: root and UID 1000, bootstrap cwd, hidden state, Close registration: PASS\n'
+printf 'RPC worktrees: root and UID 1000, bootstrap cwd, private directory/file binds, read-only mounts, hidden state, Close registration: PASS\n'
