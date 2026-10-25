@@ -42,6 +42,7 @@ func startGatewayControl(ctx context.Context, address, database string, tokens m
 		once.Do(func() {
 			rpc.Stop()
 			_ = listener.Close()
+			server.cancelSandboxOperations("")
 			_ = store.close()
 		})
 	}

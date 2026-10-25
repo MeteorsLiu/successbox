@@ -57,6 +57,7 @@ message ClientRequest {
     ListMCPSecrets list_mcp_secrets = 7;
     DeleteMCPSecret delete_mcp_secret = 8;
     RequestMCPInstall request_mcp_install = 9;
+    CancelSandboxOperations cancel_sandbox_operations = 10;
   }
 }
 
@@ -85,6 +86,7 @@ message ServerResponse {
     MCPInstallSubmitted mcp_install_submitted = 6;
     MCPInstallDecisionAccepted mcp_install_decision_accepted = 7;
     OperationError operation_error = 8;
+    SandboxOperationsCancelled sandbox_operations_cancelled = 9;
   }
 }
 
@@ -103,6 +105,15 @@ message OpenSession {
 message ResumeSession {
   string last_event_id = 1;
   bool replay_pending = 2;
+}
+
+// Host gateway only. Cancels current pending operations without deleting data.
+message CancelSandboxOperations {
+  string sandbox_id = 1;
+}
+
+message SandboxOperationsCancelled {
+  string sandbox_id = 1;
 }
 
 message ResolveSecret {

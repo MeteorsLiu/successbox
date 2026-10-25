@@ -353,6 +353,7 @@ type ClientRequest struct {
 	//	*ClientRequest_ListMcpSecrets
 	//	*ClientRequest_DeleteMcpSecret
 	//	*ClientRequest_RequestMcpInstall
+	//	*ClientRequest_CancelSandboxOperations
 	Body          isClientRequest_Body `protobuf_oneof:"body"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -476,6 +477,15 @@ func (x *ClientRequest) GetRequestMcpInstall() *RequestMCPInstall {
 	return nil
 }
 
+func (x *ClientRequest) GetCancelSandboxOperations() *CancelSandboxOperations {
+	if x != nil {
+		if x, ok := x.Body.(*ClientRequest_CancelSandboxOperations); ok {
+			return x.CancelSandboxOperations
+		}
+	}
+	return nil
+}
+
 type isClientRequest_Body interface {
 	isClientRequest_Body()
 }
@@ -516,6 +526,10 @@ type ClientRequest_RequestMcpInstall struct {
 	RequestMcpInstall *RequestMCPInstall `protobuf:"bytes,9,opt,name=request_mcp_install,json=requestMcpInstall,proto3,oneof"`
 }
 
+type ClientRequest_CancelSandboxOperations struct {
+	CancelSandboxOperations *CancelSandboxOperations `protobuf:"bytes,10,opt,name=cancel_sandbox_operations,json=cancelSandboxOperations,proto3,oneof"`
+}
+
 func (*ClientRequest_OpenSession) isClientRequest_Body() {}
 
 func (*ClientRequest_ResumeSession) isClientRequest_Body() {}
@@ -533,6 +547,8 @@ func (*ClientRequest_ListMcpSecrets) isClientRequest_Body() {}
 func (*ClientRequest_DeleteMcpSecret) isClientRequest_Body() {}
 
 func (*ClientRequest_RequestMcpInstall) isClientRequest_Body() {}
+
+func (*ClientRequest_CancelSandboxOperations) isClientRequest_Body() {}
 
 type ClientResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -726,6 +742,7 @@ type ServerResponse struct {
 	//	*ServerResponse_McpInstallSubmitted
 	//	*ServerResponse_McpInstallDecisionAccepted
 	//	*ServerResponse_OperationError
+	//	*ServerResponse_SandboxOperationsCancelled
 	Body          isServerResponse_Body `protobuf_oneof:"body"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -840,6 +857,15 @@ func (x *ServerResponse) GetOperationError() *OperationError {
 	return nil
 }
 
+func (x *ServerResponse) GetSandboxOperationsCancelled() *SandboxOperationsCancelled {
+	if x != nil {
+		if x, ok := x.Body.(*ServerResponse_SandboxOperationsCancelled); ok {
+			return x.SandboxOperationsCancelled
+		}
+	}
+	return nil
+}
+
 type isServerResponse_Body interface {
 	isServerResponse_Body()
 }
@@ -876,6 +902,10 @@ type ServerResponse_OperationError struct {
 	OperationError *OperationError `protobuf:"bytes,8,opt,name=operation_error,json=operationError,proto3,oneof"`
 }
 
+type ServerResponse_SandboxOperationsCancelled struct {
+	SandboxOperationsCancelled *SandboxOperationsCancelled `protobuf:"bytes,9,opt,name=sandbox_operations_cancelled,json=sandboxOperationsCancelled,proto3,oneof"`
+}
+
 func (*ServerResponse_SessionOpened) isServerResponse_Body() {}
 
 func (*ServerResponse_SecretValue) isServerResponse_Body() {}
@@ -891,6 +921,8 @@ func (*ServerResponse_McpInstallSubmitted) isServerResponse_Body() {}
 func (*ServerResponse_McpInstallDecisionAccepted) isServerResponse_Body() {}
 
 func (*ServerResponse_OperationError) isServerResponse_Body() {}
+
+func (*ServerResponse_SandboxOperationsCancelled) isServerResponse_Body() {}
 
 type ServerEvent struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -1078,6 +1110,95 @@ func (x *ResumeSession) GetReplayPending() bool {
 	return false
 }
 
+// Host gateway only. Cancels current pending operations without deleting data.
+type CancelSandboxOperations struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SandboxId     string                 `protobuf:"bytes,1,opt,name=sandbox_id,json=sandboxId,proto3" json:"sandbox_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CancelSandboxOperations) Reset() {
+	*x = CancelSandboxOperations{}
+	mi := &file_api_gateway_v1_gateway_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CancelSandboxOperations) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CancelSandboxOperations) ProtoMessage() {}
+
+func (x *CancelSandboxOperations) ProtoReflect() protoreflect.Message {
+	mi := &file_api_gateway_v1_gateway_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CancelSandboxOperations.ProtoReflect.Descriptor instead.
+func (*CancelSandboxOperations) Descriptor() ([]byte, []int) {
+	return file_api_gateway_v1_gateway_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *CancelSandboxOperations) GetSandboxId() string {
+	if x != nil {
+		return x.SandboxId
+	}
+	return ""
+}
+
+type SandboxOperationsCancelled struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SandboxId     string                 `protobuf:"bytes,1,opt,name=sandbox_id,json=sandboxId,proto3" json:"sandbox_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SandboxOperationsCancelled) Reset() {
+	*x = SandboxOperationsCancelled{}
+	mi := &file_api_gateway_v1_gateway_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SandboxOperationsCancelled) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SandboxOperationsCancelled) ProtoMessage() {}
+
+func (x *SandboxOperationsCancelled) ProtoReflect() protoreflect.Message {
+	mi := &file_api_gateway_v1_gateway_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SandboxOperationsCancelled.ProtoReflect.Descriptor instead.
+func (*SandboxOperationsCancelled) Descriptor() ([]byte, []int) {
+	return file_api_gateway_v1_gateway_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *SandboxOperationsCancelled) GetSandboxId() string {
+	if x != nil {
+		return x.SandboxId
+	}
+	return ""
+}
+
 type ResolveSecret struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	OperationId   string                 `protobuf:"bytes,1,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
@@ -1094,7 +1215,7 @@ type ResolveSecret struct {
 
 func (x *ResolveSecret) Reset() {
 	*x = ResolveSecret{}
-	mi := &file_api_gateway_v1_gateway_proto_msgTypes[9]
+	mi := &file_api_gateway_v1_gateway_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1106,7 +1227,7 @@ func (x *ResolveSecret) String() string {
 func (*ResolveSecret) ProtoMessage() {}
 
 func (x *ResolveSecret) ProtoReflect() protoreflect.Message {
-	mi := &file_api_gateway_v1_gateway_proto_msgTypes[9]
+	mi := &file_api_gateway_v1_gateway_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1119,7 +1240,7 @@ func (x *ResolveSecret) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResolveSecret.ProtoReflect.Descriptor instead.
 func (*ResolveSecret) Descriptor() ([]byte, []int) {
-	return file_api_gateway_v1_gateway_proto_rawDescGZIP(), []int{9}
+	return file_api_gateway_v1_gateway_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *ResolveSecret) GetOperationId() string {
@@ -1191,7 +1312,7 @@ type CreateMCPSecret struct {
 
 func (x *CreateMCPSecret) Reset() {
 	*x = CreateMCPSecret{}
-	mi := &file_api_gateway_v1_gateway_proto_msgTypes[10]
+	mi := &file_api_gateway_v1_gateway_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1203,7 +1324,7 @@ func (x *CreateMCPSecret) String() string {
 func (*CreateMCPSecret) ProtoMessage() {}
 
 func (x *CreateMCPSecret) ProtoReflect() protoreflect.Message {
-	mi := &file_api_gateway_v1_gateway_proto_msgTypes[10]
+	mi := &file_api_gateway_v1_gateway_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1216,7 +1337,7 @@ func (x *CreateMCPSecret) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateMCPSecret.ProtoReflect.Descriptor instead.
 func (*CreateMCPSecret) Descriptor() ([]byte, []int) {
-	return file_api_gateway_v1_gateway_proto_rawDescGZIP(), []int{10}
+	return file_api_gateway_v1_gateway_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *CreateMCPSecret) GetSandboxId() string {
@@ -1267,7 +1388,7 @@ type UpdateMCPSecret struct {
 
 func (x *UpdateMCPSecret) Reset() {
 	*x = UpdateMCPSecret{}
-	mi := &file_api_gateway_v1_gateway_proto_msgTypes[11]
+	mi := &file_api_gateway_v1_gateway_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1279,7 +1400,7 @@ func (x *UpdateMCPSecret) String() string {
 func (*UpdateMCPSecret) ProtoMessage() {}
 
 func (x *UpdateMCPSecret) ProtoReflect() protoreflect.Message {
-	mi := &file_api_gateway_v1_gateway_proto_msgTypes[11]
+	mi := &file_api_gateway_v1_gateway_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1292,7 +1413,7 @@ func (x *UpdateMCPSecret) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateMCPSecret.ProtoReflect.Descriptor instead.
 func (*UpdateMCPSecret) Descriptor() ([]byte, []int) {
-	return file_api_gateway_v1_gateway_proto_rawDescGZIP(), []int{11}
+	return file_api_gateway_v1_gateway_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *UpdateMCPSecret) GetSandboxId() string {
@@ -1341,7 +1462,7 @@ type GetMCPSecret struct {
 
 func (x *GetMCPSecret) Reset() {
 	*x = GetMCPSecret{}
-	mi := &file_api_gateway_v1_gateway_proto_msgTypes[12]
+	mi := &file_api_gateway_v1_gateway_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1353,7 +1474,7 @@ func (x *GetMCPSecret) String() string {
 func (*GetMCPSecret) ProtoMessage() {}
 
 func (x *GetMCPSecret) ProtoReflect() protoreflect.Message {
-	mi := &file_api_gateway_v1_gateway_proto_msgTypes[12]
+	mi := &file_api_gateway_v1_gateway_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1366,7 +1487,7 @@ func (x *GetMCPSecret) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetMCPSecret.ProtoReflect.Descriptor instead.
 func (*GetMCPSecret) Descriptor() ([]byte, []int) {
-	return file_api_gateway_v1_gateway_proto_rawDescGZIP(), []int{12}
+	return file_api_gateway_v1_gateway_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *GetMCPSecret) GetSandboxId() string {
@@ -1400,7 +1521,7 @@ type ListMCPSecrets struct {
 
 func (x *ListMCPSecrets) Reset() {
 	*x = ListMCPSecrets{}
-	mi := &file_api_gateway_v1_gateway_proto_msgTypes[13]
+	mi := &file_api_gateway_v1_gateway_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1412,7 +1533,7 @@ func (x *ListMCPSecrets) String() string {
 func (*ListMCPSecrets) ProtoMessage() {}
 
 func (x *ListMCPSecrets) ProtoReflect() protoreflect.Message {
-	mi := &file_api_gateway_v1_gateway_proto_msgTypes[13]
+	mi := &file_api_gateway_v1_gateway_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1425,7 +1546,7 @@ func (x *ListMCPSecrets) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListMCPSecrets.ProtoReflect.Descriptor instead.
 func (*ListMCPSecrets) Descriptor() ([]byte, []int) {
-	return file_api_gateway_v1_gateway_proto_rawDescGZIP(), []int{13}
+	return file_api_gateway_v1_gateway_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *ListMCPSecrets) GetSandboxId() string {
@@ -1453,7 +1574,7 @@ type DeleteMCPSecret struct {
 
 func (x *DeleteMCPSecret) Reset() {
 	*x = DeleteMCPSecret{}
-	mi := &file_api_gateway_v1_gateway_proto_msgTypes[14]
+	mi := &file_api_gateway_v1_gateway_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1465,7 +1586,7 @@ func (x *DeleteMCPSecret) String() string {
 func (*DeleteMCPSecret) ProtoMessage() {}
 
 func (x *DeleteMCPSecret) ProtoReflect() protoreflect.Message {
-	mi := &file_api_gateway_v1_gateway_proto_msgTypes[14]
+	mi := &file_api_gateway_v1_gateway_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1478,7 +1599,7 @@ func (x *DeleteMCPSecret) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteMCPSecret.ProtoReflect.Descriptor instead.
 func (*DeleteMCPSecret) Descriptor() ([]byte, []int) {
-	return file_api_gateway_v1_gateway_proto_rawDescGZIP(), []int{14}
+	return file_api_gateway_v1_gateway_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *DeleteMCPSecret) GetSandboxId() string {
@@ -1517,7 +1638,7 @@ type RequestMCPInstall struct {
 
 func (x *RequestMCPInstall) Reset() {
 	*x = RequestMCPInstall{}
-	mi := &file_api_gateway_v1_gateway_proto_msgTypes[15]
+	mi := &file_api_gateway_v1_gateway_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1529,7 +1650,7 @@ func (x *RequestMCPInstall) String() string {
 func (*RequestMCPInstall) ProtoMessage() {}
 
 func (x *RequestMCPInstall) ProtoReflect() protoreflect.Message {
-	mi := &file_api_gateway_v1_gateway_proto_msgTypes[15]
+	mi := &file_api_gateway_v1_gateway_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1542,7 +1663,7 @@ func (x *RequestMCPInstall) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RequestMCPInstall.ProtoReflect.Descriptor instead.
 func (*RequestMCPInstall) Descriptor() ([]byte, []int) {
-	return file_api_gateway_v1_gateway_proto_rawDescGZIP(), []int{15}
+	return file_api_gateway_v1_gateway_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *RequestMCPInstall) GetOperationId() string {
@@ -1606,7 +1727,7 @@ type DecideMCPInstall struct {
 
 func (x *DecideMCPInstall) Reset() {
 	*x = DecideMCPInstall{}
-	mi := &file_api_gateway_v1_gateway_proto_msgTypes[16]
+	mi := &file_api_gateway_v1_gateway_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1618,7 +1739,7 @@ func (x *DecideMCPInstall) String() string {
 func (*DecideMCPInstall) ProtoMessage() {}
 
 func (x *DecideMCPInstall) ProtoReflect() protoreflect.Message {
-	mi := &file_api_gateway_v1_gateway_proto_msgTypes[16]
+	mi := &file_api_gateway_v1_gateway_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1631,7 +1752,7 @@ func (x *DecideMCPInstall) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DecideMCPInstall.ProtoReflect.Descriptor instead.
 func (*DecideMCPInstall) Descriptor() ([]byte, []int) {
-	return file_api_gateway_v1_gateway_proto_rawDescGZIP(), []int{16}
+	return file_api_gateway_v1_gateway_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *DecideMCPInstall) GetOperationId() string {
@@ -1676,7 +1797,7 @@ type ProvideSecret struct {
 
 func (x *ProvideSecret) Reset() {
 	*x = ProvideSecret{}
-	mi := &file_api_gateway_v1_gateway_proto_msgTypes[17]
+	mi := &file_api_gateway_v1_gateway_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1688,7 +1809,7 @@ func (x *ProvideSecret) String() string {
 func (*ProvideSecret) ProtoMessage() {}
 
 func (x *ProvideSecret) ProtoReflect() protoreflect.Message {
-	mi := &file_api_gateway_v1_gateway_proto_msgTypes[17]
+	mi := &file_api_gateway_v1_gateway_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1701,7 +1822,7 @@ func (x *ProvideSecret) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProvideSecret.ProtoReflect.Descriptor instead.
 func (*ProvideSecret) Descriptor() ([]byte, []int) {
-	return file_api_gateway_v1_gateway_proto_rawDescGZIP(), []int{17}
+	return file_api_gateway_v1_gateway_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *ProvideSecret) GetOperationId() string {
@@ -1756,7 +1877,7 @@ type CancelSecret struct {
 
 func (x *CancelSecret) Reset() {
 	*x = CancelSecret{}
-	mi := &file_api_gateway_v1_gateway_proto_msgTypes[18]
+	mi := &file_api_gateway_v1_gateway_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1768,7 +1889,7 @@ func (x *CancelSecret) String() string {
 func (*CancelSecret) ProtoMessage() {}
 
 func (x *CancelSecret) ProtoReflect() protoreflect.Message {
-	mi := &file_api_gateway_v1_gateway_proto_msgTypes[18]
+	mi := &file_api_gateway_v1_gateway_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1781,7 +1902,7 @@ func (x *CancelSecret) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CancelSecret.ProtoReflect.Descriptor instead.
 func (*CancelSecret) Descriptor() ([]byte, []int) {
-	return file_api_gateway_v1_gateway_proto_rawDescGZIP(), []int{18}
+	return file_api_gateway_v1_gateway_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *CancelSecret) GetOperationId() string {
@@ -1808,7 +1929,7 @@ type SessionOpened struct {
 
 func (x *SessionOpened) Reset() {
 	*x = SessionOpened{}
-	mi := &file_api_gateway_v1_gateway_proto_msgTypes[19]
+	mi := &file_api_gateway_v1_gateway_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1820,7 +1941,7 @@ func (x *SessionOpened) String() string {
 func (*SessionOpened) ProtoMessage() {}
 
 func (x *SessionOpened) ProtoReflect() protoreflect.Message {
-	mi := &file_api_gateway_v1_gateway_proto_msgTypes[19]
+	mi := &file_api_gateway_v1_gateway_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1833,7 +1954,7 @@ func (x *SessionOpened) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SessionOpened.ProtoReflect.Descriptor instead.
 func (*SessionOpened) Descriptor() ([]byte, []int) {
-	return file_api_gateway_v1_gateway_proto_rawDescGZIP(), []int{19}
+	return file_api_gateway_v1_gateway_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *SessionOpened) GetSessionId() string {
@@ -1864,7 +1985,7 @@ type SecretInputRequest struct {
 
 func (x *SecretInputRequest) Reset() {
 	*x = SecretInputRequest{}
-	mi := &file_api_gateway_v1_gateway_proto_msgTypes[20]
+	mi := &file_api_gateway_v1_gateway_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1876,7 +1997,7 @@ func (x *SecretInputRequest) String() string {
 func (*SecretInputRequest) ProtoMessage() {}
 
 func (x *SecretInputRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_gateway_v1_gateway_proto_msgTypes[20]
+	mi := &file_api_gateway_v1_gateway_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1889,7 +2010,7 @@ func (x *SecretInputRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SecretInputRequest.ProtoReflect.Descriptor instead.
 func (*SecretInputRequest) Descriptor() ([]byte, []int) {
-	return file_api_gateway_v1_gateway_proto_rawDescGZIP(), []int{20}
+	return file_api_gateway_v1_gateway_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *SecretInputRequest) GetOperationId() string {
@@ -1944,7 +2065,7 @@ type SecretValue struct {
 
 func (x *SecretValue) Reset() {
 	*x = SecretValue{}
-	mi := &file_api_gateway_v1_gateway_proto_msgTypes[21]
+	mi := &file_api_gateway_v1_gateway_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1956,7 +2077,7 @@ func (x *SecretValue) String() string {
 func (*SecretValue) ProtoMessage() {}
 
 func (x *SecretValue) ProtoReflect() protoreflect.Message {
-	mi := &file_api_gateway_v1_gateway_proto_msgTypes[21]
+	mi := &file_api_gateway_v1_gateway_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1969,7 +2090,7 @@ func (x *SecretValue) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SecretValue.ProtoReflect.Descriptor instead.
 func (*SecretValue) Descriptor() ([]byte, []int) {
-	return file_api_gateway_v1_gateway_proto_rawDescGZIP(), []int{21}
+	return file_api_gateway_v1_gateway_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *SecretValue) GetOperationId() string {
@@ -2003,7 +2124,7 @@ type MCPSecretRecord struct {
 
 func (x *MCPSecretRecord) Reset() {
 	*x = MCPSecretRecord{}
-	mi := &file_api_gateway_v1_gateway_proto_msgTypes[22]
+	mi := &file_api_gateway_v1_gateway_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2015,7 +2136,7 @@ func (x *MCPSecretRecord) String() string {
 func (*MCPSecretRecord) ProtoMessage() {}
 
 func (x *MCPSecretRecord) ProtoReflect() protoreflect.Message {
-	mi := &file_api_gateway_v1_gateway_proto_msgTypes[22]
+	mi := &file_api_gateway_v1_gateway_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2028,7 +2149,7 @@ func (x *MCPSecretRecord) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MCPSecretRecord.ProtoReflect.Descriptor instead.
 func (*MCPSecretRecord) Descriptor() ([]byte, []int) {
-	return file_api_gateway_v1_gateway_proto_rawDescGZIP(), []int{22}
+	return file_api_gateway_v1_gateway_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *MCPSecretRecord) GetSandboxId() string {
@@ -2103,7 +2224,7 @@ type MCPSecretList struct {
 
 func (x *MCPSecretList) Reset() {
 	*x = MCPSecretList{}
-	mi := &file_api_gateway_v1_gateway_proto_msgTypes[23]
+	mi := &file_api_gateway_v1_gateway_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2115,7 +2236,7 @@ func (x *MCPSecretList) String() string {
 func (*MCPSecretList) ProtoMessage() {}
 
 func (x *MCPSecretList) ProtoReflect() protoreflect.Message {
-	mi := &file_api_gateway_v1_gateway_proto_msgTypes[23]
+	mi := &file_api_gateway_v1_gateway_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2128,7 +2249,7 @@ func (x *MCPSecretList) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MCPSecretList.ProtoReflect.Descriptor instead.
 func (*MCPSecretList) Descriptor() ([]byte, []int) {
-	return file_api_gateway_v1_gateway_proto_rawDescGZIP(), []int{23}
+	return file_api_gateway_v1_gateway_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *MCPSecretList) GetRecords() []*MCPSecretRecord {
@@ -2148,7 +2269,7 @@ type MCPSecretMutationAccepted struct {
 
 func (x *MCPSecretMutationAccepted) Reset() {
 	*x = MCPSecretMutationAccepted{}
-	mi := &file_api_gateway_v1_gateway_proto_msgTypes[24]
+	mi := &file_api_gateway_v1_gateway_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2160,7 +2281,7 @@ func (x *MCPSecretMutationAccepted) String() string {
 func (*MCPSecretMutationAccepted) ProtoMessage() {}
 
 func (x *MCPSecretMutationAccepted) ProtoReflect() protoreflect.Message {
-	mi := &file_api_gateway_v1_gateway_proto_msgTypes[24]
+	mi := &file_api_gateway_v1_gateway_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2173,7 +2294,7 @@ func (x *MCPSecretMutationAccepted) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MCPSecretMutationAccepted.ProtoReflect.Descriptor instead.
 func (*MCPSecretMutationAccepted) Descriptor() ([]byte, []int) {
-	return file_api_gateway_v1_gateway_proto_rawDescGZIP(), []int{24}
+	return file_api_gateway_v1_gateway_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *MCPSecretMutationAccepted) GetChange() MCPSecretChange {
@@ -2200,7 +2321,7 @@ type MCPSecretChanged struct {
 
 func (x *MCPSecretChanged) Reset() {
 	*x = MCPSecretChanged{}
-	mi := &file_api_gateway_v1_gateway_proto_msgTypes[25]
+	mi := &file_api_gateway_v1_gateway_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2212,7 +2333,7 @@ func (x *MCPSecretChanged) String() string {
 func (*MCPSecretChanged) ProtoMessage() {}
 
 func (x *MCPSecretChanged) ProtoReflect() protoreflect.Message {
-	mi := &file_api_gateway_v1_gateway_proto_msgTypes[25]
+	mi := &file_api_gateway_v1_gateway_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2225,7 +2346,7 @@ func (x *MCPSecretChanged) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MCPSecretChanged.ProtoReflect.Descriptor instead.
 func (*MCPSecretChanged) Descriptor() ([]byte, []int) {
-	return file_api_gateway_v1_gateway_proto_rawDescGZIP(), []int{25}
+	return file_api_gateway_v1_gateway_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *MCPSecretChanged) GetChange() MCPSecretChange {
@@ -2257,7 +2378,7 @@ type MCPInstallApprovalRequest struct {
 
 func (x *MCPInstallApprovalRequest) Reset() {
 	*x = MCPInstallApprovalRequest{}
-	mi := &file_api_gateway_v1_gateway_proto_msgTypes[26]
+	mi := &file_api_gateway_v1_gateway_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2269,7 +2390,7 @@ func (x *MCPInstallApprovalRequest) String() string {
 func (*MCPInstallApprovalRequest) ProtoMessage() {}
 
 func (x *MCPInstallApprovalRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_gateway_v1_gateway_proto_msgTypes[26]
+	mi := &file_api_gateway_v1_gateway_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2282,7 +2403,7 @@ func (x *MCPInstallApprovalRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MCPInstallApprovalRequest.ProtoReflect.Descriptor instead.
 func (*MCPInstallApprovalRequest) Descriptor() ([]byte, []int) {
-	return file_api_gateway_v1_gateway_proto_rawDescGZIP(), []int{26}
+	return file_api_gateway_v1_gateway_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *MCPInstallApprovalRequest) GetRequestId() string {
@@ -2345,7 +2466,7 @@ type MCPInstallSubmitted struct {
 
 func (x *MCPInstallSubmitted) Reset() {
 	*x = MCPInstallSubmitted{}
-	mi := &file_api_gateway_v1_gateway_proto_msgTypes[27]
+	mi := &file_api_gateway_v1_gateway_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2357,7 +2478,7 @@ func (x *MCPInstallSubmitted) String() string {
 func (*MCPInstallSubmitted) ProtoMessage() {}
 
 func (x *MCPInstallSubmitted) ProtoReflect() protoreflect.Message {
-	mi := &file_api_gateway_v1_gateway_proto_msgTypes[27]
+	mi := &file_api_gateway_v1_gateway_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2370,7 +2491,7 @@ func (x *MCPInstallSubmitted) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MCPInstallSubmitted.ProtoReflect.Descriptor instead.
 func (*MCPInstallSubmitted) Descriptor() ([]byte, []int) {
-	return file_api_gateway_v1_gateway_proto_rawDescGZIP(), []int{27}
+	return file_api_gateway_v1_gateway_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *MCPInstallSubmitted) GetOperationId() string {
@@ -2404,7 +2525,7 @@ type MCPInstallDecisionAccepted struct {
 
 func (x *MCPInstallDecisionAccepted) Reset() {
 	*x = MCPInstallDecisionAccepted{}
-	mi := &file_api_gateway_v1_gateway_proto_msgTypes[28]
+	mi := &file_api_gateway_v1_gateway_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2416,7 +2537,7 @@ func (x *MCPInstallDecisionAccepted) String() string {
 func (*MCPInstallDecisionAccepted) ProtoMessage() {}
 
 func (x *MCPInstallDecisionAccepted) ProtoReflect() protoreflect.Message {
-	mi := &file_api_gateway_v1_gateway_proto_msgTypes[28]
+	mi := &file_api_gateway_v1_gateway_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2429,7 +2550,7 @@ func (x *MCPInstallDecisionAccepted) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MCPInstallDecisionAccepted.ProtoReflect.Descriptor instead.
 func (*MCPInstallDecisionAccepted) Descriptor() ([]byte, []int) {
-	return file_api_gateway_v1_gateway_proto_rawDescGZIP(), []int{28}
+	return file_api_gateway_v1_gateway_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *MCPInstallDecisionAccepted) GetRequestId() string {
@@ -2461,7 +2582,7 @@ type MCPInstallChanged struct {
 
 func (x *MCPInstallChanged) Reset() {
 	*x = MCPInstallChanged{}
-	mi := &file_api_gateway_v1_gateway_proto_msgTypes[29]
+	mi := &file_api_gateway_v1_gateway_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2473,7 +2594,7 @@ func (x *MCPInstallChanged) String() string {
 func (*MCPInstallChanged) ProtoMessage() {}
 
 func (x *MCPInstallChanged) ProtoReflect() protoreflect.Message {
-	mi := &file_api_gateway_v1_gateway_proto_msgTypes[29]
+	mi := &file_api_gateway_v1_gateway_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2486,7 +2607,7 @@ func (x *MCPInstallChanged) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MCPInstallChanged.ProtoReflect.Descriptor instead.
 func (*MCPInstallChanged) Descriptor() ([]byte, []int) {
-	return file_api_gateway_v1_gateway_proto_rawDescGZIP(), []int{29}
+	return file_api_gateway_v1_gateway_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *MCPInstallChanged) GetChange() MCPInstallChange {
@@ -2542,7 +2663,7 @@ type OperationError struct {
 
 func (x *OperationError) Reset() {
 	*x = OperationError{}
-	mi := &file_api_gateway_v1_gateway_proto_msgTypes[30]
+	mi := &file_api_gateway_v1_gateway_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2554,7 +2675,7 @@ func (x *OperationError) String() string {
 func (*OperationError) ProtoMessage() {}
 
 func (x *OperationError) ProtoReflect() protoreflect.Message {
-	mi := &file_api_gateway_v1_gateway_proto_msgTypes[30]
+	mi := &file_api_gateway_v1_gateway_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2567,7 +2688,7 @@ func (x *OperationError) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OperationError.ProtoReflect.Descriptor instead.
 func (*OperationError) Descriptor() ([]byte, []int) {
-	return file_api_gateway_v1_gateway_proto_rawDescGZIP(), []int{30}
+	return file_api_gateway_v1_gateway_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *OperationError) GetOperationId() string {
@@ -2607,7 +2728,7 @@ const file_api_gateway_v1_gateway_proto_rawDesc = "" +
 	"\arequest\x18\x03 \x01(\v2$.successbox.gateway.v1.ServerRequestH\x00R\arequest\x12C\n" +
 	"\bresponse\x18\x04 \x01(\v2%.successbox.gateway.v1.ServerResponseH\x00R\bresponse\x12:\n" +
 	"\x05event\x18\x05 \x01(\v2\".successbox.gateway.v1.ServerEventH\x00R\x05eventB\x06\n" +
-	"\x04body\"\xfc\x05\n" +
+	"\x04body\"\xea\x06\n" +
 	"\rClientRequest\x12G\n" +
 	"\fopen_session\x18\x01 \x01(\v2\".successbox.gateway.v1.OpenSessionH\x00R\vopenSession\x12M\n" +
 	"\x0eresume_session\x18\x02 \x01(\v2$.successbox.gateway.v1.ResumeSessionH\x00R\rresumeSession\x12M\n" +
@@ -2617,7 +2738,9 @@ const file_api_gateway_v1_gateway_proto_rawDesc = "" +
 	"\x0eget_mcp_secret\x18\x06 \x01(\v2#.successbox.gateway.v1.GetMCPSecretH\x00R\fgetMcpSecret\x12Q\n" +
 	"\x10list_mcp_secrets\x18\a \x01(\v2%.successbox.gateway.v1.ListMCPSecretsH\x00R\x0elistMcpSecrets\x12T\n" +
 	"\x11delete_mcp_secret\x18\b \x01(\v2&.successbox.gateway.v1.DeleteMCPSecretH\x00R\x0fdeleteMcpSecret\x12Z\n" +
-	"\x13request_mcp_install\x18\t \x01(\v2(.successbox.gateway.v1.RequestMCPInstallH\x00R\x11requestMcpInstallB\x06\n" +
+	"\x13request_mcp_install\x18\t \x01(\v2(.successbox.gateway.v1.RequestMCPInstallH\x00R\x11requestMcpInstall\x12l\n" +
+	"\x19cancel_sandbox_operations\x18\n" +
+	" \x01(\v2..successbox.gateway.v1.CancelSandboxOperationsH\x00R\x17cancelSandboxOperationsB\x06\n" +
 	"\x04body\"\x8c\x02\n" +
 	"\x0eClientResponse\x12M\n" +
 	"\x0eprovide_secret\x18\x01 \x01(\v2$.successbox.gateway.v1.ProvideSecretH\x00R\rprovideSecret\x12J\n" +
@@ -2627,7 +2750,7 @@ const file_api_gateway_v1_gateway_proto_rawDesc = "" +
 	"\rServerRequest\x12N\n" +
 	"\fsecret_input\x18\x01 \x01(\v2).successbox.gateway.v1.SecretInputRequestH\x00R\vsecretInput\x12d\n" +
 	"\x14mcp_install_approval\x18\x02 \x01(\v20.successbox.gateway.v1.MCPInstallApprovalRequestH\x00R\x12mcpInstallApprovalB\x06\n" +
-	"\x04body\"\xd5\x05\n" +
+	"\x04body\"\xcc\x06\n" +
 	"\x0eServerResponse\x12M\n" +
 	"\x0esession_opened\x18\x01 \x01(\v2$.successbox.gateway.v1.SessionOpenedH\x00R\rsessionOpened\x12G\n" +
 	"\fsecret_value\x18\x02 \x01(\v2\".successbox.gateway.v1.SecretValueH\x00R\vsecretValue\x12M\n" +
@@ -2637,7 +2760,8 @@ const file_api_gateway_v1_gateway_proto_rawDesc = "" +
 	"\x11mutation_accepted\x18\x05 \x01(\v20.successbox.gateway.v1.MCPSecretMutationAcceptedH\x00R\x10mutationAccepted\x12`\n" +
 	"\x15mcp_install_submitted\x18\x06 \x01(\v2*.successbox.gateway.v1.MCPInstallSubmittedH\x00R\x13mcpInstallSubmitted\x12v\n" +
 	"\x1dmcp_install_decision_accepted\x18\a \x01(\v21.successbox.gateway.v1.MCPInstallDecisionAcceptedH\x00R\x1amcpInstallDecisionAccepted\x12P\n" +
-	"\x0foperation_error\x18\b \x01(\v2%.successbox.gateway.v1.OperationErrorH\x00R\x0eoperationErrorB\x06\n" +
+	"\x0foperation_error\x18\b \x01(\v2%.successbox.gateway.v1.OperationErrorH\x00R\x0eoperationError\x12u\n" +
+	"\x1csandbox_operations_cancelled\x18\t \x01(\v21.successbox.gateway.v1.SandboxOperationsCancelledH\x00R\x1asandboxOperationsCancelledB\x06\n" +
 	"\x04body\"\xc3\x01\n" +
 	"\vServerEvent\x12P\n" +
 	"\x0esecret_changed\x18\x01 \x01(\v2'.successbox.gateway.v1.MCPSecretChangedH\x00R\rsecretChanged\x12Z\n" +
@@ -2649,7 +2773,13 @@ const file_api_gateway_v1_gateway_proto_rawDesc = "" +
 	"\x0eclient_version\x18\x02 \x01(\tR\rclientVersion\"Z\n" +
 	"\rResumeSession\x12\"\n" +
 	"\rlast_event_id\x18\x01 \x01(\tR\vlastEventId\x12%\n" +
-	"\x0ereplay_pending\x18\x02 \x01(\bR\rreplayPending\"\x80\x02\n" +
+	"\x0ereplay_pending\x18\x02 \x01(\bR\rreplayPending\"8\n" +
+	"\x17CancelSandboxOperations\x12\x1d\n" +
+	"\n" +
+	"sandbox_id\x18\x01 \x01(\tR\tsandboxId\";\n" +
+	"\x1aSandboxOperationsCancelled\x12\x1d\n" +
+	"\n" +
+	"sandbox_id\x18\x01 \x01(\tR\tsandboxId\"\x80\x02\n" +
 	"\rResolveSecret\x12!\n" +
 	"\foperation_id\x18\x01 \x01(\tR\voperationId\x12\x1d\n" +
 	"\n" +
@@ -2822,7 +2952,7 @@ func file_api_gateway_v1_gateway_proto_rawDescGZIP() []byte {
 }
 
 var file_api_gateway_v1_gateway_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_api_gateway_v1_gateway_proto_msgTypes = make([]protoimpl.MessageInfo, 31)
+var file_api_gateway_v1_gateway_proto_msgTypes = make([]protoimpl.MessageInfo, 33)
 var file_api_gateway_v1_gateway_proto_goTypes = []any{
 	(MCPSecretChange)(0),               // 0: successbox.gateway.v1.MCPSecretChange
 	(MCPInstallChange)(0),              // 1: successbox.gateway.v1.MCPInstallChange
@@ -2835,29 +2965,31 @@ var file_api_gateway_v1_gateway_proto_goTypes = []any{
 	(*ServerEvent)(nil),                // 8: successbox.gateway.v1.ServerEvent
 	(*OpenSession)(nil),                // 9: successbox.gateway.v1.OpenSession
 	(*ResumeSession)(nil),              // 10: successbox.gateway.v1.ResumeSession
-	(*ResolveSecret)(nil),              // 11: successbox.gateway.v1.ResolveSecret
-	(*CreateMCPSecret)(nil),            // 12: successbox.gateway.v1.CreateMCPSecret
-	(*UpdateMCPSecret)(nil),            // 13: successbox.gateway.v1.UpdateMCPSecret
-	(*GetMCPSecret)(nil),               // 14: successbox.gateway.v1.GetMCPSecret
-	(*ListMCPSecrets)(nil),             // 15: successbox.gateway.v1.ListMCPSecrets
-	(*DeleteMCPSecret)(nil),            // 16: successbox.gateway.v1.DeleteMCPSecret
-	(*RequestMCPInstall)(nil),          // 17: successbox.gateway.v1.RequestMCPInstall
-	(*DecideMCPInstall)(nil),           // 18: successbox.gateway.v1.DecideMCPInstall
-	(*ProvideSecret)(nil),              // 19: successbox.gateway.v1.ProvideSecret
-	(*CancelSecret)(nil),               // 20: successbox.gateway.v1.CancelSecret
-	(*SessionOpened)(nil),              // 21: successbox.gateway.v1.SessionOpened
-	(*SecretInputRequest)(nil),         // 22: successbox.gateway.v1.SecretInputRequest
-	(*SecretValue)(nil),                // 23: successbox.gateway.v1.SecretValue
-	(*MCPSecretRecord)(nil),            // 24: successbox.gateway.v1.MCPSecretRecord
-	(*MCPSecretList)(nil),              // 25: successbox.gateway.v1.MCPSecretList
-	(*MCPSecretMutationAccepted)(nil),  // 26: successbox.gateway.v1.MCPSecretMutationAccepted
-	(*MCPSecretChanged)(nil),           // 27: successbox.gateway.v1.MCPSecretChanged
-	(*MCPInstallApprovalRequest)(nil),  // 28: successbox.gateway.v1.MCPInstallApprovalRequest
-	(*MCPInstallSubmitted)(nil),        // 29: successbox.gateway.v1.MCPInstallSubmitted
-	(*MCPInstallDecisionAccepted)(nil), // 30: successbox.gateway.v1.MCPInstallDecisionAccepted
-	(*MCPInstallChanged)(nil),          // 31: successbox.gateway.v1.MCPInstallChanged
-	(*OperationError)(nil),             // 32: successbox.gateway.v1.OperationError
-	(*timestamppb.Timestamp)(nil),      // 33: google.protobuf.Timestamp
+	(*CancelSandboxOperations)(nil),    // 11: successbox.gateway.v1.CancelSandboxOperations
+	(*SandboxOperationsCancelled)(nil), // 12: successbox.gateway.v1.SandboxOperationsCancelled
+	(*ResolveSecret)(nil),              // 13: successbox.gateway.v1.ResolveSecret
+	(*CreateMCPSecret)(nil),            // 14: successbox.gateway.v1.CreateMCPSecret
+	(*UpdateMCPSecret)(nil),            // 15: successbox.gateway.v1.UpdateMCPSecret
+	(*GetMCPSecret)(nil),               // 16: successbox.gateway.v1.GetMCPSecret
+	(*ListMCPSecrets)(nil),             // 17: successbox.gateway.v1.ListMCPSecrets
+	(*DeleteMCPSecret)(nil),            // 18: successbox.gateway.v1.DeleteMCPSecret
+	(*RequestMCPInstall)(nil),          // 19: successbox.gateway.v1.RequestMCPInstall
+	(*DecideMCPInstall)(nil),           // 20: successbox.gateway.v1.DecideMCPInstall
+	(*ProvideSecret)(nil),              // 21: successbox.gateway.v1.ProvideSecret
+	(*CancelSecret)(nil),               // 22: successbox.gateway.v1.CancelSecret
+	(*SessionOpened)(nil),              // 23: successbox.gateway.v1.SessionOpened
+	(*SecretInputRequest)(nil),         // 24: successbox.gateway.v1.SecretInputRequest
+	(*SecretValue)(nil),                // 25: successbox.gateway.v1.SecretValue
+	(*MCPSecretRecord)(nil),            // 26: successbox.gateway.v1.MCPSecretRecord
+	(*MCPSecretList)(nil),              // 27: successbox.gateway.v1.MCPSecretList
+	(*MCPSecretMutationAccepted)(nil),  // 28: successbox.gateway.v1.MCPSecretMutationAccepted
+	(*MCPSecretChanged)(nil),           // 29: successbox.gateway.v1.MCPSecretChanged
+	(*MCPInstallApprovalRequest)(nil),  // 30: successbox.gateway.v1.MCPInstallApprovalRequest
+	(*MCPInstallSubmitted)(nil),        // 31: successbox.gateway.v1.MCPInstallSubmitted
+	(*MCPInstallDecisionAccepted)(nil), // 32: successbox.gateway.v1.MCPInstallDecisionAccepted
+	(*MCPInstallChanged)(nil),          // 33: successbox.gateway.v1.MCPInstallChanged
+	(*OperationError)(nil),             // 34: successbox.gateway.v1.OperationError
+	(*timestamppb.Timestamp)(nil),      // 35: google.protobuf.Timestamp
 }
 var file_api_gateway_v1_gateway_proto_depIdxs = []int32{
 	4,  // 0: successbox.gateway.v1.GatewayClientMessage.request:type_name -> successbox.gateway.v1.ClientRequest
@@ -2867,46 +2999,48 @@ var file_api_gateway_v1_gateway_proto_depIdxs = []int32{
 	8,  // 4: successbox.gateway.v1.GatewayServerMessage.event:type_name -> successbox.gateway.v1.ServerEvent
 	9,  // 5: successbox.gateway.v1.ClientRequest.open_session:type_name -> successbox.gateway.v1.OpenSession
 	10, // 6: successbox.gateway.v1.ClientRequest.resume_session:type_name -> successbox.gateway.v1.ResumeSession
-	11, // 7: successbox.gateway.v1.ClientRequest.resolve_secret:type_name -> successbox.gateway.v1.ResolveSecret
-	12, // 8: successbox.gateway.v1.ClientRequest.create_mcp_secret:type_name -> successbox.gateway.v1.CreateMCPSecret
-	13, // 9: successbox.gateway.v1.ClientRequest.update_mcp_secret:type_name -> successbox.gateway.v1.UpdateMCPSecret
-	14, // 10: successbox.gateway.v1.ClientRequest.get_mcp_secret:type_name -> successbox.gateway.v1.GetMCPSecret
-	15, // 11: successbox.gateway.v1.ClientRequest.list_mcp_secrets:type_name -> successbox.gateway.v1.ListMCPSecrets
-	16, // 12: successbox.gateway.v1.ClientRequest.delete_mcp_secret:type_name -> successbox.gateway.v1.DeleteMCPSecret
-	17, // 13: successbox.gateway.v1.ClientRequest.request_mcp_install:type_name -> successbox.gateway.v1.RequestMCPInstall
-	19, // 14: successbox.gateway.v1.ClientResponse.provide_secret:type_name -> successbox.gateway.v1.ProvideSecret
-	20, // 15: successbox.gateway.v1.ClientResponse.cancel_secret:type_name -> successbox.gateway.v1.CancelSecret
-	18, // 16: successbox.gateway.v1.ClientResponse.decide_mcp_install:type_name -> successbox.gateway.v1.DecideMCPInstall
-	22, // 17: successbox.gateway.v1.ServerRequest.secret_input:type_name -> successbox.gateway.v1.SecretInputRequest
-	28, // 18: successbox.gateway.v1.ServerRequest.mcp_install_approval:type_name -> successbox.gateway.v1.MCPInstallApprovalRequest
-	21, // 19: successbox.gateway.v1.ServerResponse.session_opened:type_name -> successbox.gateway.v1.SessionOpened
-	23, // 20: successbox.gateway.v1.ServerResponse.secret_value:type_name -> successbox.gateway.v1.SecretValue
-	24, // 21: successbox.gateway.v1.ServerResponse.secret_record:type_name -> successbox.gateway.v1.MCPSecretRecord
-	25, // 22: successbox.gateway.v1.ServerResponse.secret_list:type_name -> successbox.gateway.v1.MCPSecretList
-	26, // 23: successbox.gateway.v1.ServerResponse.mutation_accepted:type_name -> successbox.gateway.v1.MCPSecretMutationAccepted
-	29, // 24: successbox.gateway.v1.ServerResponse.mcp_install_submitted:type_name -> successbox.gateway.v1.MCPInstallSubmitted
-	30, // 25: successbox.gateway.v1.ServerResponse.mcp_install_decision_accepted:type_name -> successbox.gateway.v1.MCPInstallDecisionAccepted
-	32, // 26: successbox.gateway.v1.ServerResponse.operation_error:type_name -> successbox.gateway.v1.OperationError
-	27, // 27: successbox.gateway.v1.ServerEvent.secret_changed:type_name -> successbox.gateway.v1.MCPSecretChanged
-	31, // 28: successbox.gateway.v1.ServerEvent.mcp_install_changed:type_name -> successbox.gateway.v1.MCPInstallChanged
-	33, // 29: successbox.gateway.v1.MCPSecretRecord.created_at:type_name -> google.protobuf.Timestamp
-	33, // 30: successbox.gateway.v1.MCPSecretRecord.updated_at:type_name -> google.protobuf.Timestamp
-	33, // 31: successbox.gateway.v1.MCPSecretRecord.last_used_at:type_name -> google.protobuf.Timestamp
-	24, // 32: successbox.gateway.v1.MCPSecretList.records:type_name -> successbox.gateway.v1.MCPSecretRecord
-	0,  // 33: successbox.gateway.v1.MCPSecretMutationAccepted.change:type_name -> successbox.gateway.v1.MCPSecretChange
-	24, // 34: successbox.gateway.v1.MCPSecretMutationAccepted.record:type_name -> successbox.gateway.v1.MCPSecretRecord
-	0,  // 35: successbox.gateway.v1.MCPSecretChanged.change:type_name -> successbox.gateway.v1.MCPSecretChange
-	24, // 36: successbox.gateway.v1.MCPSecretChanged.record:type_name -> successbox.gateway.v1.MCPSecretRecord
-	1,  // 37: successbox.gateway.v1.MCPInstallSubmitted.change:type_name -> successbox.gateway.v1.MCPInstallChange
-	1,  // 38: successbox.gateway.v1.MCPInstallDecisionAccepted.change:type_name -> successbox.gateway.v1.MCPInstallChange
-	1,  // 39: successbox.gateway.v1.MCPInstallChanged.change:type_name -> successbox.gateway.v1.MCPInstallChange
-	2,  // 40: successbox.gateway.v1.GatewayManagementService.GatewaySession:input_type -> successbox.gateway.v1.GatewayClientMessage
-	3,  // 41: successbox.gateway.v1.GatewayManagementService.GatewaySession:output_type -> successbox.gateway.v1.GatewayServerMessage
-	41, // [41:42] is the sub-list for method output_type
-	40, // [40:41] is the sub-list for method input_type
-	40, // [40:40] is the sub-list for extension type_name
-	40, // [40:40] is the sub-list for extension extendee
-	0,  // [0:40] is the sub-list for field type_name
+	13, // 7: successbox.gateway.v1.ClientRequest.resolve_secret:type_name -> successbox.gateway.v1.ResolveSecret
+	14, // 8: successbox.gateway.v1.ClientRequest.create_mcp_secret:type_name -> successbox.gateway.v1.CreateMCPSecret
+	15, // 9: successbox.gateway.v1.ClientRequest.update_mcp_secret:type_name -> successbox.gateway.v1.UpdateMCPSecret
+	16, // 10: successbox.gateway.v1.ClientRequest.get_mcp_secret:type_name -> successbox.gateway.v1.GetMCPSecret
+	17, // 11: successbox.gateway.v1.ClientRequest.list_mcp_secrets:type_name -> successbox.gateway.v1.ListMCPSecrets
+	18, // 12: successbox.gateway.v1.ClientRequest.delete_mcp_secret:type_name -> successbox.gateway.v1.DeleteMCPSecret
+	19, // 13: successbox.gateway.v1.ClientRequest.request_mcp_install:type_name -> successbox.gateway.v1.RequestMCPInstall
+	11, // 14: successbox.gateway.v1.ClientRequest.cancel_sandbox_operations:type_name -> successbox.gateway.v1.CancelSandboxOperations
+	21, // 15: successbox.gateway.v1.ClientResponse.provide_secret:type_name -> successbox.gateway.v1.ProvideSecret
+	22, // 16: successbox.gateway.v1.ClientResponse.cancel_secret:type_name -> successbox.gateway.v1.CancelSecret
+	20, // 17: successbox.gateway.v1.ClientResponse.decide_mcp_install:type_name -> successbox.gateway.v1.DecideMCPInstall
+	24, // 18: successbox.gateway.v1.ServerRequest.secret_input:type_name -> successbox.gateway.v1.SecretInputRequest
+	30, // 19: successbox.gateway.v1.ServerRequest.mcp_install_approval:type_name -> successbox.gateway.v1.MCPInstallApprovalRequest
+	23, // 20: successbox.gateway.v1.ServerResponse.session_opened:type_name -> successbox.gateway.v1.SessionOpened
+	25, // 21: successbox.gateway.v1.ServerResponse.secret_value:type_name -> successbox.gateway.v1.SecretValue
+	26, // 22: successbox.gateway.v1.ServerResponse.secret_record:type_name -> successbox.gateway.v1.MCPSecretRecord
+	27, // 23: successbox.gateway.v1.ServerResponse.secret_list:type_name -> successbox.gateway.v1.MCPSecretList
+	28, // 24: successbox.gateway.v1.ServerResponse.mutation_accepted:type_name -> successbox.gateway.v1.MCPSecretMutationAccepted
+	31, // 25: successbox.gateway.v1.ServerResponse.mcp_install_submitted:type_name -> successbox.gateway.v1.MCPInstallSubmitted
+	32, // 26: successbox.gateway.v1.ServerResponse.mcp_install_decision_accepted:type_name -> successbox.gateway.v1.MCPInstallDecisionAccepted
+	34, // 27: successbox.gateway.v1.ServerResponse.operation_error:type_name -> successbox.gateway.v1.OperationError
+	12, // 28: successbox.gateway.v1.ServerResponse.sandbox_operations_cancelled:type_name -> successbox.gateway.v1.SandboxOperationsCancelled
+	29, // 29: successbox.gateway.v1.ServerEvent.secret_changed:type_name -> successbox.gateway.v1.MCPSecretChanged
+	33, // 30: successbox.gateway.v1.ServerEvent.mcp_install_changed:type_name -> successbox.gateway.v1.MCPInstallChanged
+	35, // 31: successbox.gateway.v1.MCPSecretRecord.created_at:type_name -> google.protobuf.Timestamp
+	35, // 32: successbox.gateway.v1.MCPSecretRecord.updated_at:type_name -> google.protobuf.Timestamp
+	35, // 33: successbox.gateway.v1.MCPSecretRecord.last_used_at:type_name -> google.protobuf.Timestamp
+	26, // 34: successbox.gateway.v1.MCPSecretList.records:type_name -> successbox.gateway.v1.MCPSecretRecord
+	0,  // 35: successbox.gateway.v1.MCPSecretMutationAccepted.change:type_name -> successbox.gateway.v1.MCPSecretChange
+	26, // 36: successbox.gateway.v1.MCPSecretMutationAccepted.record:type_name -> successbox.gateway.v1.MCPSecretRecord
+	0,  // 37: successbox.gateway.v1.MCPSecretChanged.change:type_name -> successbox.gateway.v1.MCPSecretChange
+	26, // 38: successbox.gateway.v1.MCPSecretChanged.record:type_name -> successbox.gateway.v1.MCPSecretRecord
+	1,  // 39: successbox.gateway.v1.MCPInstallSubmitted.change:type_name -> successbox.gateway.v1.MCPInstallChange
+	1,  // 40: successbox.gateway.v1.MCPInstallDecisionAccepted.change:type_name -> successbox.gateway.v1.MCPInstallChange
+	1,  // 41: successbox.gateway.v1.MCPInstallChanged.change:type_name -> successbox.gateway.v1.MCPInstallChange
+	2,  // 42: successbox.gateway.v1.GatewayManagementService.GatewaySession:input_type -> successbox.gateway.v1.GatewayClientMessage
+	3,  // 43: successbox.gateway.v1.GatewayManagementService.GatewaySession:output_type -> successbox.gateway.v1.GatewayServerMessage
+	43, // [43:44] is the sub-list for method output_type
+	42, // [42:43] is the sub-list for method input_type
+	42, // [42:42] is the sub-list for extension type_name
+	42, // [42:42] is the sub-list for extension extendee
+	0,  // [0:42] is the sub-list for field type_name
 }
 
 func init() { file_api_gateway_v1_gateway_proto_init() }
@@ -2933,6 +3067,7 @@ func file_api_gateway_v1_gateway_proto_init() {
 		(*ClientRequest_ListMcpSecrets)(nil),
 		(*ClientRequest_DeleteMcpSecret)(nil),
 		(*ClientRequest_RequestMcpInstall)(nil),
+		(*ClientRequest_CancelSandboxOperations)(nil),
 	}
 	file_api_gateway_v1_gateway_proto_msgTypes[3].OneofWrappers = []any{
 		(*ClientResponse_ProvideSecret)(nil),
@@ -2952,6 +3087,7 @@ func file_api_gateway_v1_gateway_proto_init() {
 		(*ServerResponse_McpInstallSubmitted)(nil),
 		(*ServerResponse_McpInstallDecisionAccepted)(nil),
 		(*ServerResponse_OperationError)(nil),
+		(*ServerResponse_SandboxOperationsCancelled)(nil),
 	}
 	file_api_gateway_v1_gateway_proto_msgTypes[6].OneofWrappers = []any{
 		(*ServerEvent_SecretChanged)(nil),
@@ -2963,7 +3099,7 @@ func file_api_gateway_v1_gateway_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_api_gateway_v1_gateway_proto_rawDesc), len(file_api_gateway_v1_gateway_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   31,
+			NumMessages:   33,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

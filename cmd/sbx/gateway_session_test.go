@@ -88,12 +88,14 @@ func gatewayTestServer(t *testing.T) (*gatewayServer, string) {
 	}
 	server := newGatewayServer(store, map[string]string{"frontend": "front", "gateway": "gate", "agent": "agent"})
 	t.Cleanup(func() {
+		server.cancelSandboxOperations("")
 		_ = store.close()
 	})
 	return server, path
 }
 
 func TestGatewaySessionResolvesSecretThroughFrontend(t *testing.T) {
+	t.Run("sandbox cancellation and installation deadlines", testGatewayCancellation)
 	t.Run("CRUD and persistence", func(t *testing.T) {
 		server, path := gatewayTestServer(t)
 		front := gatewayTestClient(t, server, "frontend", "front")
