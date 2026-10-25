@@ -367,8 +367,16 @@ func TestSharedPrivateWorktrees(t *testing.T) {
 	}
 	// The explicit guest-root prefix is tested by real interceptor integration;
 	// these direct Git calls use the host prefix as their guest view.
+	// Git maintenance can leave this lock after a guest commit. It is not an
+	// object and must neither prevent publication nor be copied to the host.
+	if err := os.WriteFile(filepath.Join(common, "objects", "maintenance.lock"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
 	if err := publish(&repository{Source: source, Directory: first, CommonDirectory: common, GuestRoot: base}); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Join(source, ".git", "objects", "maintenance.lock")); !os.IsNotExist(err) {
+		t.Fatalf("guest maintenance lock reached the source: %v", err)
 	}
 	if err := publish(&repository{Source: linked, Directory: second, CommonDirectory: common, GuestRoot: base, skipObjects: true}); err != nil {
 		t.Fatal(err)
