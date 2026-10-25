@@ -116,7 +116,7 @@ Both arm64 backends passed TTY checks for initial size, resize, interactive inpu
 
 The minimal test image still reports missing Openbox menu/PyXDG autostart components. These checks launch the terminal explicitly through Exec; desktop menus and autostart are not covered.
 
-Successbox currently covers sandbox control and RDP transport. It does not yet integrate the frontend, MCP gateway, or LLM gateway.
+Successbox covers sandbox control, RDP transport and host-side LLM/MCP gateway process management. See [gateway setup and validation](gateways/README.md). Agent configuration adaptation, the sandbox-to-gateway transport and the frontend are not yet integrated.
 
 ## Lazy worktrees on Linux
 

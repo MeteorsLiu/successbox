@@ -28,12 +28,23 @@ func run() int {
 		return 2
 	}
 	args := flags.Args()
-	if *socket == "" || len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: sbx --socket PATH create FILE.json | exec [options] COMMAND... | display [options] | close ID")
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: sbx --socket PATH create FILE.json | exec [options] COMMAND... | display [options] | close ID; sbx gateways [options]")
 		return 2
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+	if args[0] == "gateways" {
+		if err := gateways(ctx, args[1:], os.Stderr); err != nil && !errors.Is(err, context.Canceled) {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		return 0
+	}
+	if *socket == "" {
+		fmt.Fprintln(os.Stderr, "--socket is required for sandbox commands")
+		return 2
+	}
 	connection, err := grpc.NewClient("unix://"+*socket, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)

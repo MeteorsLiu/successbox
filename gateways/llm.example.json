@@ -1,0 +1,12 @@
+{
+  "config-version": 8,
+  "server": {"host": "127.0.0.1", "port": 8317},
+  "management": {"secret-key": "", "disable-control-panel": true},
+  "access": {"api-keys": ["REPLACE_WITH_LLM_GATEWAY_KEY"]},
+  "oauth": {"auth-dir": "./oauth"},
+  "observability": {"logs": {"request-log": false, "debug": false}},
+  "api-keys": {
+    "claude": [{"name": "claude", "keys": [{"api-key": "REPLACE_WITH_ANTHROPIC_KEY"}]}],
+    "codex": [{"name": "codex", "keys": [{"api-key": "REPLACE_WITH_CODEX_KEY"}]}]
+  }
+}
