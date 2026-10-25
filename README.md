@@ -11,9 +11,11 @@
 
 **让 Claude Code 和 Codex 在熟悉的工作流中获得隔离保护。**
 
-Successbox 是 Agent 的配套运行时：它在宿主机上管理受控的沙箱、网关和结果保存，让用户继续使用原来的 Agent、项目和配置。它不是另一个 Agent，也不是通用虚拟机管理器。Agent 通过统一的 gRPC 生命周期运行，桌面场景通过同一条 `Display` 流传输 RDP 画面与输入。
+Successbox 是 Claude Code 和 Codex 的桌面配套工具，围绕执行隔离、账号与 MCP 连接、敏感信息交互和改动保存展开。它希望让你继续使用熟悉的 Agent、项目、配置、Skills 和会话，同时将运行中的修改留在私有环境中，将上游凭据留在宿主网关。
 
-项目目前处于持续集成阶段。下面先说明产品和架构，再给出已经实现的能力、明确的边界以及本地运行入口。
+**[总体架构](https://github.com/MeteorsLiu/successbox/issues/2) · [产品设计](https://github.com/MeteorsLiu/successbox/issues/16) · [本地运行](#快速开始) · [API 文档](api/README.md)**
+
+项目仍在开发中，运行时、网关与桌面端正在逐步接通。下文区分产品目标和当前 `main` 分支的实现；完整用户环境继承与桌面端到端流程尚未完成。
 
 ## 先看这些
 
@@ -31,7 +33,7 @@ Issue 是设计决策和待验证边界的索引，不代表其中所有目标�
 
 ## 产品流程
 
-用户不需要学习新的 Agent 命令，也不需要管理 guest IP、挂载点或 VM。典型流程是：
+产品目标是让用户继续使用熟悉的 Agent，把环境保护、连接管理和授权交互交给 Successbox。预期使用流程如下，当前接通范围见后面的能力表：
 
 1. 用户在宿主端选择 Claude Code 或 Codex，并保留自己的项目和配置环境。
 2. Successbox 创建一个沙箱，通过受控文件视图、进程树和资源限制启动 Agent。
@@ -43,16 +45,18 @@ Successbox 的产品原则是：宿主原配置不直接回写，Agent 不能凭
 
 ## 架构
 
+下图展示设计中的模块关系。虚线表示仍需完成产品接线的沙箱到网关数据通路；当前实现和验证范围见下节。
+
 ```mermaid
 flowchart LR
     User["用户"] --> UI["桌面配套工具 / CLI"]
 
     subgraph Host["宿主管理域"]
-        UI <--> Control["SandboxService\nCreate / Exec / Display / Close"]
-        UI <--> Session["GatewaySession\n宿主控制流"]
-        LLM["LLM 网关\nCLIProxyAPI + Successbox 扩展"]
-        MCP["MCP 网关\nBifrost + virtual key"]
-        Publish["worktree helper\n关闭后发布结果"]
+        UI <--> Control["沙箱服务<br/>Create / Exec / Display / Close"]
+        UI <--> Session["GatewaySession<br/>宿主控制流"]
+        LLM["LLM 网关<br/>CLIProxyAPI + Successbox 扩展"]
+        MCP["MCP 网关<br/>Bifrost + virtual key"]
+        Publish["worktree helper<br/>Linux 仓库准备与发布"]
     end
 
     subgraph Guest["Agent 执行域"]
@@ -62,15 +66,16 @@ flowchart LR
     end
 
     Control --> Runtime
-    Agent -->|"模型请求"| LLM
-    Agent -->|"MCP 请求"| MCP
+    Agent -.->|"模型请求"| LLM
+    Agent -.->|"MCP 请求"| MCP
+    MCP <--> Session
     Runtime -->|"Display：RDP 字节流"| UI
-    Runtime -->|"关闭后通知"| Publish
+    Control -->|"停止 guest 后发布"| Publish
     LLM --> Providers["模型提供方"]
     MCP --> Services["远程或本地 MCP 服务"]
 ```
 
-模块职责保持单向：沙箱运行时只负责执行隔离和生命周期，网关负责协议、上游连接和授权，worktree helper 负责 Git 仓库准备与发布，前端负责用户选择和可信交互。控制流和模型/MCP 数据流是不同的权限域；宿主控制端口不会直接暴露给 guest。
+沙箱服务负责执行隔离和生命周期，网关负责协议、上游连接和授权，worktree helper 负责 Git 仓库准备与发布，前端负责用户选择和可信交互。`SandboxService` 使用本地 Unix socket；`GatewaySession` 使用宿主 TCP HTTP/2 gRPC。两者与模型/MCP 数据入口分别管理，Agent 不通过控制端口选择账号或取得管理权限。本地 MCP 进程的隔离需要单独配置，不能仅凭 Bifrost 启动它就视为已隔离。
 
 ## 已实现能力与边界
 
@@ -83,11 +88,14 @@ flowchart LR
 | 网关 | 宿主侧可以启动 CLIProxyAPI 和 Bifrost，并通过 `GatewaySession` 管理 MCP 安装、敏感值和取消操作。 |
 | Git 结果 | Linux `--worktrees` 模式在首次访问仓库时准备私有副本，`Close` 后注册 detached worktree，失败时保留结果。 |
 | 非 Git 文件 | 独立目录保存和目录语义分类尚未完成；普通写入仍属于一次性临时层。 |
-| Agent 配置 | 配置适配、完整用户文件继承、macOS worktree 发布和完整桌面 E2E 仍需单独验证。 |
+| 桌面 UI | 已接通 MCP 审批、敏感值输入、密钥元数据列表、删除和重连；Agent 启动、账号管理、保护开关和改动展示尚未接通。 |
+| 完整产品流程 | Agent 配置适配、完整用户文件继承、macOS worktree 发布和完整桌面 E2E 尚未完成。 |
 
-网关客户端联调已经覆盖真实 CLIProxyAPI、Bifrost、Claude Code 和 Codex 的部分路径，但这不等于完整的“宿主文件环境 → 沙箱 → 模型请求 → MCP → 关闭发布”产品验收。README 中的验证记录会明确区分协议测试、宿主联调和真实桌面验证。
+宿主网关联调已覆盖真实 CLIProxyAPI、Bifrost、Claude Code 和 Codex 的部分路径，详见[网关验证记录](gateways/README.md)。这些结果不代表完整的“用户文件环境 → 沙箱 → 模型请求 → MCP → 关闭发布”已经验收。
 
 ## 快速开始
+
+<a id="build"></a>
 
 ### 构建
 
@@ -98,6 +106,8 @@ make go       # 构建 sbx 客户端和 Linux 后端
 make apple    # 构建并签名 Apple 后端
 make check    # Go race tests
 ```
+
+<a id="start-the-service"></a>
 
 ### Linux 后端
 
@@ -111,6 +121,8 @@ make check    # Go race tests
 ```
 
 默认网络为 `none`。网关数据入口和宿主控制端口不是同一个地址；不要把管理端口放进 guest。
+
+<a id="lazy-worktrees-on-linux"></a>
 
 启用 Linux Git worktree 流程时，再构建 runtime helper 并传入 `--worktrees`：
 
@@ -126,6 +138,8 @@ sudo ./bin/successbox-gvisor \
   --worktrees "$(pwd)/bin/worktree-runtime/worktrees"
 ```
 
+该模式需要 rootful Linux 服务。Create 可以使用 `/` 作为 rootfs，并传入用户的工作目录、UID/GID；普通写入留在临时层，Git 仓库首次访问时准备私有副本。Close 停止 guest 后发布结果，原工作文件和分支不被覆盖。通过 `git -C /original/project worktree list` 查看结果；准备成本、仓库类型及并发限制见 [runtime 文档](runtime/README.md#worktree-policy)。
+
 ### macOS Apple 后端
 
 准备 ARM64 Linux kernel 和包含 `vminitd`、`vmexec` 的 `initfs.ext4`：
@@ -139,6 +153,8 @@ sudo ./bin/successbox-gvisor \
 ```
 
 macOS gVisor 模式需要额外提供 Linux rootfs 和 runtime 目录。它运行的是 Linux 程序，不会把 macOS Mach-O 应用放进 guest；宿主项目映射和 worktree 回传也不应从“VM 能启动”推断为已完成。完整命令和图形验证见 [Apple 后端说明](#macos-上的-gvisor) 与测试脚本。
+
+<a id="run-gvisor-on-macos"></a>
 
 #### macOS 上的 gVisor
 
@@ -158,7 +174,11 @@ CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go -C runtime build -o ../bin/linux-runtim
   --runtime-directory "$(pwd)/bin/linux-runtime"
 ```
 
-共享的 Linux rootfs 和 runtime 目录是只读的；VM 使用独立的稀疏 ext4 可写层。默认资源是 4 个 vCPU、1 GiB 外层容器内存和 128 MiB VM 开销。资源上限不是实测占用量。
+`--linux-rootfs` 与 `--runtime-directory` 必须成对提供。Create 的 rootfs、工作目录和挂载来源在这个模式下都是 Linux VM 内的路径。共享的 Linux rootfs 和 runtime 目录是只读的，VM 使用独立的稀疏 ext4 可写层；`main` 当前默认资源为 4 个 vCPU、1 GiB 外层容器内存和 128 MiB VM 开销，这些是配置上限，不是实测占用量。
+
+Close 只关闭指定沙箱；向 Apple 启动器发送 SIGINT/SIGTERM 才会清理所属沙箱并停止 VM。socket 文件存在不代表服务已就绪，应确认 `gVisor backend listening` 日志。
+
+<a id="create-execute-display-close"></a>
 
 ## 协议示例
 
@@ -179,6 +199,10 @@ Create 请求使用 protobuf 字段名：
 ./bin/sbx --socket /absolute/path/successbox/control.sock close SANDBOX_ID
 ```
 
+把 JSON 保存为 `box.json`，并将 `SANDBOX_ID` 替换为 Create 返回的 ID。默认初始进程是 `/bin/sleep infinity`。
+
+<a id="wire-behavior"></a>
+
 RPC 的最小生命周期是：
 
 | RPC | 数据方向 |
@@ -189,6 +213,14 @@ RPC 的最小生命周期是：
 | `Close` | sandbox ID → 停止进程并清理运行时状态 |
 
 协议细节、认证元数据和 GatewaySession 双向消息见 [api/README.md](api/README.md)。
+
+使用图形应用时，guest 必须已安装并启动 RDP 服务、图形会话及 `/usr/bin/socat`；`desktop: true` 不会自动安装它们。通过 `initArgv` 指定桌面启动命令后，可以用现成 RDP 客户端连接 CLI 提供的本地转发端口：
+
+```sh
+./bin/sbx --socket /absolute/path/successbox/control.sock display --sandbox SANDBOX_ID --listen 127.0.0.1:13389
+```
+
+RDP 认证在 guest 内配置。Exec 或 Display 断线不会自动结束 guest；必须调用 Close 才会关闭沙箱并触发 worktree 发布。
 
 ## 桌面应用
 
@@ -205,14 +237,33 @@ npm run package
 
 真实模式需要先在宿主启动 `sbx gateways` 并配置控制 token。模拟界面必须显式设置 `SUCCESSBOX_DEMO=1`；真实服务未连接时不会静默返回模拟成功。更多配置和安全边界见 [desktop/README.md](desktop/README.md)。
 
+<a id="continuous-integration"></a>
+<a id="verification-scope"></a>
+
 ## 验证
 
 ```sh
 make check
-go test -race ./...
 ```
 
 CI 分别覆盖 Go race tests、Linux amd64/arm64 platform runtime、macOS Apple backend 和宿主 gateway tests。原生 VM 和 RDP 检查需要目标机器上的 kernel、initfs、rootfs、RDP 客户端及桌面依赖；编译通过或协议夹具通过，不能替代图形登录、鼠标键盘和关闭发布的完整验收。
+
+macOS 原生集成检查在准备好资源后运行：
+
+```sh
+python3 testdata/apple-gvisor.py \
+  bin/sbx bin/successbox-apple \
+  /absolute/path/to/vmlinux-arm64 /absolute/path/to/initfs.ext4 \
+  /absolute/path/to/linux-rootfs bin/linux-runtime
+
+python3 testdata/apple-gvisor-display.py \
+  bin/sbx bin/successbox-apple \
+  /absolute/path/to/vmlinux-arm64 /absolute/path/to/initfs.ext4 \
+  /absolute/path/to/desktop-rootfs bin/linux-runtime \
+  /absolute/path/to/test-rdp-certificate.pem
+```
+
+已有 macOS arm64 实机记录覆盖多沙箱、文件写入隔离、二进制 IO、TTY、资源限制、RDP 协商和重连；另行验证过图形登录、1024×768 画面和 xterm 键鼠输入。上述脚本不自动验证图形登录，也不能代替 Codex Desktop 的完整验收。详细记录见 [#24](https://github.com/MeteorsLiu/successbox/issues/24)。
 
 主要入口：
 
