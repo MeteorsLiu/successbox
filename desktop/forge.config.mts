@@ -10,7 +10,7 @@ const config: ForgeConfig = {
   packagerConfig: {
     asar: true,
     executableName: 'successbox',
-    extraResource: ['assets'],
+    extraResource: ['assets', '../api/gateway/v1/gateway.proto'],
   },
   rebuildConfig: {},
   makers: [
