@@ -31,6 +31,8 @@ type server struct {
 	worktreeHelper string
 	root           string
 	rdpPort        uint16
+	network        string
+	slirp          string
 	mu             sync.Mutex
 	boxes          map[string]*sandbox
 }
@@ -47,6 +49,7 @@ type sandbox struct {
 	closeErr  error
 	worktrees *exec.Cmd
 	unmount   func() error
+	net       *sandboxNetwork
 }
 
 func (s *server) command(ctx context.Context, args ...string) *exec.Cmd {
@@ -107,8 +110,12 @@ func (s *server) Create(ctx context.Context, request *pb.CreateRequest) (*pb.San
 	created := false
 	var worktrees *exec.Cmd
 	var unmount func() error
+	var network *sandboxNetwork
 	defer func() {
 		if !created {
+			if network != nil {
+				network.cleanup()
+			}
 			_ = s.command(context.Background(), "delete", "--force", id).Run()
 			if worktrees != nil {
 				worktrees.Process.Signal(syscall.SIGTERM)
@@ -122,11 +129,25 @@ func (s *server) Create(ctx context.Context, request *pb.CreateRequest) (*pb.San
 			_ = os.RemoveAll(dir)
 		}
 	}()
+	if s.network == "slirp4netns" {
+		network, err = createSandboxNetwork(dir, s.slirp)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "prepare sandbox network: %v", err)
+		}
+	}
 	filestore := filepath.Join(dir, "overlay")
 	if err := os.Mkdir(filestore, 0700); err != nil {
 		return nil, status.Error(codes.Internal, "cannot create overlay storage")
 	}
 	spec := makeSpec(request)
+	if network != nil {
+		resolv := filepath.Join(dir, "resolv.conf")
+		if err := os.WriteFile(resolv, []byte("nameserver 10.0.2.3\n"), 0600); err != nil {
+			return nil, status.Errorf(codes.Internal, "prepare sandbox DNS: %v", err)
+		}
+		spec.Mounts = append(spec.Mounts, specs.Mount{Source: resolv, Destination: "/etc/resolv.conf", Type: "bind", Options: []string{"rbind", "ro", "nosuid", "nodev"}})
+		spec.Linux.Namespaces = append(spec.Linux.Namespaces, specs.LinuxNamespace{Type: specs.NetworkNamespace, Path: network.path})
+	}
 	if s.worktreeHelper != "" {
 		if err := hideWorktreeState(spec, s.root); err != nil {
 			return nil, status.Errorf(codes.Internal, "hide runtime state: %v", err)
@@ -160,7 +181,11 @@ func (s *server) Create(ctx context.Context, request *pb.CreateRequest) (*pb.San
 	if err := os.WriteFile(filepath.Join(dir, "config.json"), data, 0600); err != nil {
 		return nil, status.Error(codes.Internal, "cannot write OCI spec")
 	}
-	args := []string{"--network=none", "--overlay2=all:dir=" + filestore}
+	runscNetwork := "none"
+	if network != nil {
+		runscNetwork = "sandbox"
+	}
+	args := []string{"--network=" + runscNetwork, "--overlay2=all:dir=" + filestore}
 	if s.worktreeHelper != "" {
 		args[1] = "--overlay2=root:dir=" + filestore
 		args = append(args, "--platform=successbox", "--platform_device_path="+filepath.Join(dir, "worktrees.sock"))
@@ -189,7 +214,7 @@ func (s *server) Create(ctx context.Context, request *pb.CreateRequest) (*pb.San
 		return nil, status.Errorf(codes.Internal, "runsc startup failed: %v", err)
 	}
 	boxCtx, cancel := context.WithCancel(context.Background())
-	b := &sandbox{unmount: unmount, worktrees: worktrees, id: id, dir: dir, options: proto.Clone(request).(*pb.CreateRequest), ctx: boxCtx, cancel: cancel}
+	b := &sandbox{unmount: unmount, worktrees: worktrees, net: network, id: id, dir: dir, options: proto.Clone(request).(*pb.CreateRequest), ctx: boxCtx, cancel: cancel}
 	s.mu.Lock()
 	s.boxes[id] = b
 	s.mu.Unlock()
@@ -682,6 +707,9 @@ func (s *server) Close(ctx context.Context, ref *pb.SandboxRef) (*pb.Empty, erro
 		if err == nil && b.worktrees != nil {
 			err = b.worktrees.Process.Signal(syscall.SIGTERM)
 			err = errors.Join(err, b.worktrees.Wait())
+		}
+		if err == nil && b.net != nil {
+			b.net.cleanup()
 		}
 		if err == nil && b.unmount != nil {
 			err = b.unmount()
