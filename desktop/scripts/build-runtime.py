@@ -138,7 +138,7 @@ with tempfile.TemporaryDirectory(prefix='successbox-build-') as scratch:
     if system == 'linux':
         subprocess.run(['npm', 'install', '--prefix', linux / 'claude', '--omit=dev', '@anthropic-ai/claude-code@2.1.310'], check=True)
         shutil.copy2(shutil.which('node'), linux / 'node')
-        subprocess.run([linux / 'node', linux / 'claude/node_modules/@anthropic-ai/claude-code/cli.js', '--version'], check=True)
+        subprocess.run([linux / 'claude/node_modules/.bin/claude', '--version'], check=True)
 
     # Include the notices from the exact source dependencies used by the build.
     for module_root in (repo, repo / 'runtime', repo / 'gateways/cliproxy'):

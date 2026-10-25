@@ -47,8 +47,12 @@ mkdir "$stage/init"
 sudo tar -xzf "$stage/init.tar.gz" -C "$stage/init"
 truncate -s 512M "$output/initfs.ext4"
 sudo mkfs.ext4 -F -q -d "$stage/init" "$output/initfs.ext4"
-curl --fail --location --retry 3 https://github.com/kata-containers/kata-containers/releases/download/3.17.0/kata-static-3.17.0-arm64.tar.xz -o "$stage/kata.tar.xz"
+# Kata's 6.18.5 kernel enables the TUN driver required by slirp4netns.
+curl --fail --location --retry 3 https://github.com/kata-containers/kata-containers/releases/download/3.26.0/kata-static-3.26.0-arm64.tar.zst -o "$stage/kata.tar.zst"
+printf '83cf59d06ef66565338f78eb47c34a4885d8d79312178650efb5b2cdad357922  %s\n' "$stage/kata.tar.zst" | sha256sum -c -
 mkdir "$stage/kata"
-tar -xJf "$stage/kata.tar.xz" -C "$stage/kata" ./opt/kata/share/kata-containers/ 2>/dev/null || tar -xJf "$stage/kata.tar.xz" -C "$stage/kata" opt/kata/share/kata-containers/
-cp -L "$stage/kata/opt/kata/share/kata-containers/vmlinux.container" "$output/vmlinux-arm64"
+tar --zstd -xf "$stage/kata.tar.zst" -C "$stage/kata" ./opt/kata/share/kata-containers/config-6.18.5-177 ./opt/kata/share/kata-containers/vmlinux-6.18.5-177
+grep -qx 'CONFIG_TUN=y' "$stage/kata/opt/kata/share/kata-containers/config-6.18.5-177"
+cp "$stage/kata/opt/kata/share/kata-containers/vmlinux-6.18.5-177" "$output/vmlinux-arm64"
+cp "$stage/kata/opt/kata/share/kata-containers/config-6.18.5-177" "$output/kernel.config"
 sudo chown -R "$(id -u):$(id -g)" "$output"
