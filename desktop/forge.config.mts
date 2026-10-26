@@ -48,6 +48,7 @@ const config: ForgeConfig = {
             ...dependencies,
             'pkexec',
             'slirp4netns',
+            'socat',
             'python3',
             'openssl',
             'git',

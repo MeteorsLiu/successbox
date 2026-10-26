@@ -11,7 +11,7 @@ printf '#!/bin/sh\nexit 101\n' | sudo tee "$stage/rootfs/usr/sbin/policy-rc.d" >
 sudo chmod 755 "$stage/rootfs/usr/sbin/policy-rc.d"
 sudo cp /etc/resolv.conf "$stage/rootfs/etc/resolv.conf"
 sudo chroot "$stage/rootfs" /usr/bin/env DEBIAN_FRONTEND=noninteractive apt-get update
-sudo chroot "$stage/rootfs" /usr/bin/env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends xrdp xorgxrdp openbox xterm dbus-x11 dbus procps ca-certificates curl git python3 openssl slirp4netns iproute2 util-linux fonts-dejavu-core
+sudo chroot "$stage/rootfs" /usr/bin/env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends xrdp xorgxrdp openbox xterm dbus-x11 dbus procps ca-certificates curl git python3 openssl slirp4netns socat iproute2 util-linux fonts-dejavu-core
 curl --fail --location --retry 3 https://persistent.oaistatic.com/codex-app-prod/linux/deb/latest/chatgpt_arm64.deb -o "$stage/chatgpt.deb"
 printf '68de1ec44066871e4177ba1ca793ebee6ba238397f13c794e45b14941c1261fb  %s\n' "$stage/chatgpt.deb" | sha256sum -c -
 printf '68de1ec44066871e4177ba1ca793ebee6ba238397f13c794e45b14941c1261fb  chatgpt_arm64.deb\n' > "$output/chatgpt-download.sha256"
