@@ -20,6 +20,7 @@ struct SuccessboxApple: AsyncParsableCommand {
     @Option(help: "Complete host user directory for the existing tmpfs and worktree mode.") var hostHome: String?
     @Option(help: "Inner gVisor network: none or slirp4netns.") var network: String = "none"
     @Option(help: "slirp4netns executable path inside the Linux VM.") var slirp4netns: String = "/usr/bin/slirp4netns"
+    @Flag(help: "Stop the Linux runtime when the launching desktop closes stdin.") var exitOnStdinClose: Bool = false
 
     mutating func run() async throws {
         guard rdpPort != 0 else { throw ValidationError("rdp-port must be nonzero") }
@@ -93,6 +94,12 @@ struct SuccessboxApple: AsyncParsableCommand {
             }
             defer { output.discard(); logging.cancel() }
             let (stopRequests, stop) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+            if exitOnStdinClose {
+                DispatchQueue.global().async {
+                    while let data = try? FileHandle.standardInput.read(upToCount: 4096), !data.isEmpty {}
+                    stop.yield(())
+                }
+            }
             let signals = [SIGINT, SIGTERM].map { number in
                 signal(number, SIG_IGN)
                 let source = DispatchSource.makeSignalSource(signal: number, queue: .global())
@@ -124,8 +131,12 @@ struct SuccessboxApple: AsyncParsableCommand {
                 config.bootLog = .file(path: root.appendingPathComponent("\(id).boot.log"))
                 // The VM hosts a runtime. Move its init into a leaf cgroup so
                 // runsc can enable controllers for sibling sandbox cgroups.
+                let networkSetup = network == "slirp4netns"
+                    ? "mkdir -p /dev/net; test -c /dev/net/tun || mknod /dev/net/tun c 10 200"
+                    : ":"
                 config.process.arguments = ["/bin/sh", "-ec", """
                     mkdir -p /run/successbox
+                    \(networkSetup)
                     mkdir /sys/fs/cgroup/successbox-host
                     printf '%s\\n' "$$" > /sys/fs/cgroup/successbox-host/cgroup.procs
                     exec "$@"
@@ -137,8 +148,13 @@ struct SuccessboxApple: AsyncParsableCommand {
                     let backendState = root.appendingPathComponent("gvisor").path
                     let results = URL(fileURLWithPath: backendState).appendingPathComponent("results").path
                     try FileManager.default.createDirectory(atPath: results, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o711])
-                    // Only results persist on the host. Runtime sockets and tmpfs
-                    // mount points remain on the VM filesystem, outside this share.
+                    // A packaged app stores state below the shared HOME. Keep
+                    // sockets and temporary mounts on a native guest filesystem,
+                    // while preserving the same result paths for Git publication.
+                    if backendState.hasPrefix(hostHome + "/") {
+                        config.mounts.append(.any(type: "tmpfs", source: "tmpfs",
+                            destination: backendState, options: ["mode=711"]))
+                    }
                     config.mounts.append(.share(source: results, destination: results))
                     // The trusted helper needs the source Git metadata to register
                     // worktrees. Guest access uses the Linux backend's tmpfs binds.

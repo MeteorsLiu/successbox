@@ -111,6 +111,7 @@ func (s *server) Create(ctx context.Context, request *pb.CreateRequest) (*pb.San
 	var worktrees *exec.Cmd
 	var unmount func() error
 	var network *sandboxNetwork
+	var worktreeSocketDir string
 	defer func() {
 		if !created {
 			if network != nil {
@@ -126,6 +127,7 @@ func (s *server) Create(ctx context.Context, request *pb.CreateRequest) (*pb.San
 					return
 				}
 			}
+			_ = os.RemoveAll(worktreeSocketDir)
 			_ = os.RemoveAll(dir)
 		}
 	}()
@@ -141,13 +143,22 @@ func (s *server) Create(ctx context.Context, request *pb.CreateRequest) (*pb.San
 	}
 	spec := makeSpec(request)
 	if s.worktreeHelper != "" {
+		// macOS profile paths can exceed sockaddr_un's 107-byte limit once
+		// the sandbox ID is appended. Only the socket needs a short path.
+		worktreeSocketDir, err = os.MkdirTemp("/tmp", "sbx-wt-")
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "prepare worktree socket: %v", err)
+		}
+		if err := hideWorktreeState(spec, worktreeSocketDir); err != nil {
+			return nil, status.Errorf(codes.Internal, "hide worktree socket: %v", err)
+		}
 		if err := hideWorktreeState(spec, s.root); err != nil {
 			return nil, status.Errorf(codes.Internal, "hide runtime state: %v", err)
 		}
 	}
 	if network != nil {
 		resolv := filepath.Join(dir, "resolv.conf")
-		if err := os.WriteFile(resolv, []byte("nameserver 10.0.2.3\n"), 0600); err != nil {
+		if err := os.WriteFile(resolv, []byte("nameserver 10.0.2.3\n"), 0644); err != nil {
 			return nil, status.Errorf(codes.Internal, "prepare sandbox DNS: %v", err)
 		}
 		spec.Mounts = append(spec.Mounts, specs.Mount{Source: resolv, Destination: "/etc/resolv.conf", Type: "bind", Options: []string{"rbind", "ro", "nosuid", "nodev"}})
@@ -177,6 +188,13 @@ func (s *server) Create(ctx context.Context, request *pb.CreateRequest) (*pb.San
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "prepare private mounts: %v", err)
 		}
+		unmountViews := unmount
+		unmount = func() error {
+			if err := unmountViews(); err != nil {
+				return err
+			}
+			return os.RemoveAll(worktreeSocketDir)
+		}
 	}
 
 	data, err := json.MarshalIndent(spec, "", "  ")
@@ -193,7 +211,7 @@ func (s *server) Create(ctx context.Context, request *pb.CreateRequest) (*pb.San
 	args := []string{"--network=" + runscNetwork, "--overlay2=all:dir=" + filestore}
 	if s.worktreeHelper != "" {
 		args[1] = "--overlay2=root:dir=" + filestore
-		args = append(args, "--platform=successbox", "--platform_device_path="+filepath.Join(dir, "worktrees.sock"))
+		args = append(args, "--platform=successbox", "--platform_device_path="+filepath.Join(worktreeSocketDir, "control.sock"))
 	}
 	if os.Geteuid() != 0 {
 		args = append(args, "--rootless=true", "--ignore-cgroups")
@@ -208,7 +226,7 @@ func (s *server) Create(ctx context.Context, request *pb.CreateRequest) (*pb.San
 	}
 	defer logFile.Close()
 	if s.worktreeHelper != "" {
-		worktrees, err = s.startWorktrees(ctx, id, dir, logFile)
+		worktrees, err = s.startWorktrees(ctx, id, dir, filepath.Join(worktreeSocketDir, "control.sock"), logFile)
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "worktree startup failed: %v", err)
 		}

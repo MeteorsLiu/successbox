@@ -55,7 +55,11 @@ func createSandboxNetwork(dir, slirp string) (*sandboxNetwork, error) {
 	logFile.Close()
 	if readErr != nil || marker[0] != '1' {
 		n.cleanup()
-		return nil, fmt.Errorf("slirp4netns did not become ready: %w", readErr)
+		diagnostic, _ := os.ReadFile(filepath.Join(dir, "network.log"))
+		if len(diagnostic) > 4096 {
+			diagnostic = diagnostic[len(diagnostic)-4096:]
+		}
+		return nil, fmt.Errorf("slirp4netns did not become ready: %v: %s", readErr, diagnostic)
 	}
 	return n, nil
 }

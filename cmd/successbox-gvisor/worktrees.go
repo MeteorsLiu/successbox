@@ -48,7 +48,7 @@ func hideWorktreeState(spec *specs.Spec, state string) error {
 	return nil
 }
 
-func (s *server) startWorktrees(ctx context.Context, id, dir string, log *os.File) (*exec.Cmd, error) {
+func (s *server) startWorktrees(ctx context.Context, id, dir, socket string, log *os.File) (*exec.Cmd, error) {
 	results := filepath.Join(s.root, "results", id)
 	if err := os.MkdirAll(results, 0711); err != nil {
 		return nil, err
@@ -59,7 +59,7 @@ func (s *server) startWorktrees(ctx context.Context, id, dir string, log *os.Fil
 	}
 	defer read.Close()
 	defer write.Close()
-	cmd := exec.Command(s.worktreeHelper, "--socket", filepath.Join(dir, "worktrees.sock"), "--bundle", filepath.Join(dir, "worktrees"), "--state", results, "--ready-fd", "3")
+	cmd := exec.Command(s.worktreeHelper, "--socket", socket, "--bundle", filepath.Join(dir, "worktrees"), "--state", results, "--ready-fd", "3")
 	cmd.Stdout, cmd.Stderr = log, log
 	cmd.ExtraFiles = []*os.File{write}
 	if err := cmd.Start(); err != nil {
@@ -72,7 +72,11 @@ func (s *server) startWorktrees(ctx context.Context, id, dir string, log *os.Fil
 	if _, err := io.ReadFull(read, ready[:]); err != nil || ready[0] != 1 {
 		cmd.Process.Signal(syscall.SIGTERM)
 		waitErr := cmd.Wait()
-		return nil, fmt.Errorf("helper readiness: %v; exit: %v", err, waitErr)
+		diagnostic, _ := os.ReadFile(log.Name())
+		if len(diagnostic) > 4096 {
+			diagnostic = diagnostic[len(diagnostic)-4096:]
+		}
+		return nil, fmt.Errorf("helper readiness: %v; exit: %v: %s", err, waitErr, diagnostic)
 	}
 	return cmd, nil
 }

@@ -33,12 +33,19 @@ func gateways(ctx context.Context, args []string, output io.Writer) error {
 	mcpPort := flags.Uint("mcp-port", 8081, "Bifrost loopback HTTP port")
 	controlListen := flags.String("control-listen", "", "host HTTP/2 address for GatewaySession, for example 127.0.0.1:9090")
 	dataListen := flags.String("data-listen", "", "guest-reachable HTTP address serving only model and MCP data routes")
+	stdinLifetime := flags.Bool("exit-on-stdin-close", false, "stop gateways when the launching desktop closes stdin")
 	controlDB := flags.String("control-db", "", "SQLite database for GatewaySession state")
 	frontendToken := flags.String("control-frontend-token", "", "bearer token for the frontend control client")
 	gatewayToken := flags.String("control-gateway-token", "", "bearer token for the MCP gateway control client")
 	agentToken := flags.String("control-agent-token", "", "bearer token for the sandbox agent control client")
 	if err := flags.Parse(args); err != nil {
 		return err
+	}
+	if *stdinLifetime {
+		go func() {
+			_, _ = io.Copy(io.Discard, os.Stdin)
+			cancel()
+		}()
 	}
 	if flags.NArg() != 0 || *llmConfig == "" || *mcpDir == "" || *mcpPort == 0 || *mcpPort > 65535 {
 		return errors.New("gateways requires --llm-config, --mcp-dir and a valid --mcp-port")
