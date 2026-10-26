@@ -1,11 +1,34 @@
 import { app, dialog, Notification } from 'electron';
 import path from 'node:path';
-import { readFileSync, existsSync } from 'node:fs';
-import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
+import {
+  readFileSync,
+  existsSync,
+  openSync,
+  closeSync,
+  readdirSync,
+  statSync,
+} from 'node:fs';
+import {
+  mkdtemp,
+  writeFile,
+  readFile,
+  rm,
+  mkdir,
+  rename,
+  chmod,
+  readdir,
+} from 'node:fs/promises';
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
-import { tmpdir } from 'node:os';
-import { randomUUID } from 'node:crypto';
+import { tmpdir, homedir, networkInterfaces, userInfo } from 'node:os';
+import { createServer } from 'node:net';
+import { parse as parseToml, stringify as stringifyToml } from 'smol-toml';
+import {
+  randomUUID,
+  randomBytes,
+  X509Certificate,
+  createHmac,
+} from 'node:crypto';
 import * as grpc from '@grpc/grpc-js';
 import { loadSync } from '@grpc/proto-loader';
 import type {
@@ -13,6 +36,8 @@ import type {
   AppState,
   DiffFile,
   InstallDecision,
+  NewProvider,
+  Provider,
 } from '../shared/types';
 import { AGENT_COMMANDS, AGENT_NAMES } from '../shared/agents';
 import type { Backend, BackendEvent } from './backend/backend';
@@ -68,6 +93,39 @@ type GatewayClient = grpc.Client & {
   ): grpc.ClientDuplexStream<object, GatewayMessage>;
 };
 
+type NativeLLM = {
+  server: { host: string; port: number };
+  oauth: { 'auth-dir': string };
+  access: { 'api-keys': string[] };
+  'api-keys': Record<
+    AgentId,
+    Array<{
+      name: string;
+      'base-url': string;
+      keys: Array<{ 'api-key': string }>;
+      models?: Array<{ name: string; alias: string }>;
+    }>
+  >;
+  plugins: {
+    enabled: boolean;
+    dir: string;
+    configs: {
+      successbox: {
+        enabled: boolean;
+        bindings: Record<string, Partial<Record<AgentId, string>>>;
+      };
+    };
+  };
+  [key: string]: unknown;
+};
+type RuntimeIdentity = {
+  frontend: string;
+  gateway: string;
+  agent: string;
+  admin: string;
+  scopes: Record<AgentId, { id: string; llm: string; mcp: string }>;
+};
+
 // This implementation is local to the composition root. The renderer keeps
 // its existing BackendApi; no transport credentials enter its state snapshots.
 class GatewayBackend implements Backend {
@@ -111,18 +169,71 @@ class GatewayBackend implements Backend {
   private sandboxes = new Set<string>();
   private revision = 0;
 
+  private initialization: Promise<void>;
+  private runtime?: {
+    resources: string;
+    directory: string;
+    identity: RuntimeIdentity;
+    ports: { llm: number; mcp: number; control: number; data: number };
+    gateway?: ReturnType<typeof spawn>;
+    sandbox?: ReturnType<typeof spawn>;
+    socket: string;
+  };
+  private sandboxStart?: Promise<void>;
+  private providerSelectors = new Map<string, string>();
+  private accountChanges: Promise<void> = Promise.resolve();
+  private lifetime = new AbortController();
+  private closeRuns = new Set<() => Promise<void>>();
+
   constructor() {
-    app.once('before-quit', () => {
-      this.stopped = true;
-      clearTimeout(this.retry);
-      this.stream?.cancel();
-      this.client?.close();
+    this.initialization = this.initialize().catch(() => {
+      this.state.gatewayControl = {
+        status: 'disconnected',
+        message: '服务启动失败，请检查 Successbox 私有日志后重新打开应用',
+      };
+      this.changed();
+      throw new Error('Successbox 服务初始化失败，请检查私有日志');
     });
+    void this.initialization.catch(() => undefined);
+    app.once('before-quit', (event) => {
+      event.preventDefault();
+      this.stopped = true;
+      this.lifetime.abort();
+      clearTimeout(this.retry);
+      void (async () => {
+        await this.initialization.catch(() => undefined);
+        await Promise.allSettled([...this.closeRuns].map((close) => close()));
+        this.stream?.cancel();
+        this.client?.close();
+        for (const child of [this.runtime?.sandbox, this.runtime?.gateway]) {
+          if (
+            !child?.pid ||
+            child.exitCode !== null ||
+            child.signalCode !== null
+          )
+            continue;
+          const exited = new Promise<void>((resolve) =>
+            child.once('exit', () => resolve()),
+          );
+          child.stdin?.end();
+          await exited;
+        }
+      })().finally(() => app.quit());
+    });
+  }
+
+  private async initialize() {
+    if (app.isPackaged && !process.env.SUCCESSBOX_GATEWAY_CONFIG) {
+      await this.initializeRuntime();
+    }
     let configuration: { address: string; token: string; sandboxIds: string[] };
     try {
       const file =
         process.env.SUCCESSBOX_GATEWAY_CONFIG ??
-        path.join(app.getPath('userData'), 'gateway.json');
+        path.join(
+          this.runtime?.directory ?? app.getPath('userData'),
+          'gateway.json',
+        );
       configuration = JSON.parse(readFileSync(file, 'utf8'));
       if (
         !configuration.address ||
@@ -213,6 +324,13 @@ class GatewayBackend implements Backend {
             this.state.requests.push({
               id,
               kind: 'secret',
+              agent: this.runtime
+                ? (['codex', 'claude'] as const).find(
+                    (agent) =>
+                      this.runtime!.identity.scopes[agent].id ===
+                      input.sandbox_id,
+                  )
+                : undefined,
               sandboxId: input.sandbox_id,
               mcpId: input.mcp_id,
               mcpName: input.mcp_name,
@@ -229,6 +347,13 @@ class GatewayBackend implements Backend {
             this.state.requests.push({
               id,
               kind: 'install',
+              agent: this.runtime
+                ? (['codex', 'claude'] as const).find(
+                    (agent) =>
+                      this.runtime!.identity.scopes[agent].id ===
+                      install.sandbox_id,
+                  )
+                : undefined,
               sandboxId: install.sandbox_id,
               name: install.mcp_name,
               url: install.endpoint,
@@ -462,23 +587,761 @@ class GatewayBackend implements Backend {
     }
     this.check(reply);
   }
+  private async initializeRuntime() {
+    const resources = path.join(process.resourcesPath, 'runtime');
+    const manifest = JSON.parse(
+      await readFile(path.join(resources, 'manifest.json'), 'utf8'),
+    );
+    if (
+      manifest.platform !== process.platform ||
+      manifest.arch !== process.arch
+    )
+      throw new Error('运行时与当前系统不匹配');
+    // Keep every credential under the backend state mask, including the
+    // frontend's control token. Sharing HOME must not reveal these files.
+    const directory = path.join(app.getPath('userData'), 'private', 'gvisor');
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    await chmod(directory, 0o700);
+    const identityPath = path.join(directory, 'identity.json');
+    let identity: RuntimeIdentity;
+    if (existsSync(identityPath))
+      identity = JSON.parse(await readFile(identityPath, 'utf8'));
+    else {
+      const token = () => randomBytes(32).toString('hex');
+      identity = {
+        frontend: token(),
+        gateway: token(),
+        agent: token(),
+        admin: token(),
+        scopes: {
+          codex: { id: randomUUID(), llm: token(), mcp: 'sk-bf-' + token() },
+          claude: { id: randomUUID(), llm: token(), mcp: 'sk-bf-' + token() },
+        },
+      };
+      await writeFile(identityPath, JSON.stringify(identity), {
+        mode: 0o600,
+        flag: 'wx',
+      });
+    }
+    const listeners = [];
+    const ports: number[] = [];
+    try {
+      for (let i = 0; i < 4; i++) {
+        const listener = createServer();
+        listeners.push(listener);
+        await new Promise<void>((resolve, reject) => {
+          listener.once('error', reject);
+          listener.listen(0, '127.0.0.1', resolve);
+        });
+        ports.push((listener.address() as { port: number }).port);
+      }
+    } finally {
+      await Promise.all(
+        listeners.map(
+          (listener) =>
+            new Promise<void>((resolve) => listener.close(() => resolve())),
+        ),
+      );
+    }
+    this.runtime = {
+      resources,
+      directory,
+      identity,
+      ports: {
+        llm: ports[0],
+        mcp: ports[1],
+        control: ports[2],
+        data: ports[3],
+      },
+      socket: path.join(directory, 'control.sock'),
+    };
+    const r = this.runtime;
+    await mkdir(path.join(directory, 'oauth'), {
+      recursive: true,
+      mode: 0o700,
+    });
+    await mkdir(path.join(directory, 'mcp'), { recursive: true, mode: 0o700 });
+    const llmPath = path.join(directory, 'llm.json');
+    const llm: NativeLLM = existsSync(llmPath)
+      ? JSON.parse(await readFile(llmPath, 'utf8'))
+      : {
+          'config-version': 8,
+          server: { host: '127.0.0.1', port: ports[0] },
+          management: { 'secret-key': '', 'disable-control-panel': true },
+          access: { 'api-keys': [] },
+          oauth: { 'auth-dir': '' },
+          'api-keys': { codex: [], claude: [] },
+          plugins: {
+            enabled: true,
+            dir: '',
+            configs: { successbox: { enabled: true, bindings: {} } },
+          },
+          observability: { logs: { 'request-log': false, debug: false } },
+        };
+    llm.server = { host: '127.0.0.1', port: ports[0] };
+    llm.access['api-keys'] = Object.values(identity.scopes).map(
+      (scope) => scope.llm,
+    );
+    llm.oauth['auth-dir'] = path.join(directory, 'oauth');
+    llm.plugins.dir = path.join(resources, 'host', 'plugins');
+    await this.writeLLM(llm);
+    const mcpConfig = path.join(directory, 'mcp', 'config.json');
+    // Bifrost owns installed clients in its database. Never replace that DB.
+    if (!existsSync(mcpConfig))
+      await writeFile(
+        mcpConfig,
+        JSON.stringify({
+          disable_onboarding: true,
+          client: {
+            enable_logging: false,
+            disable_content_logging: true,
+            enforce_governance_header: true,
+            mcp_disable_auto_tool_inject: true,
+          },
+          mcp: { client_configs: [] },
+          governance: {
+            auth_config: {
+              is_enabled: true,
+              admin_username: 'successbox',
+              admin_password: identity.admin,
+            },
+            virtual_keys: Object.values(identity.scopes).map((scope) => ({
+              id: scope.id,
+              name: scope.id,
+              value: scope.mcp,
+              is_active: true,
+            })),
+          },
+        }),
+        { mode: 0o600, flag: 'wx' },
+      );
+    const address = Object.entries(networkInterfaces())
+      .filter(([name]) => !/^(utun|tun|docker|veth)/.test(name))
+      .flatMap(([, addresses]) => addresses ?? [])
+      .find(
+        (entry) =>
+          entry.family === 'IPv4' &&
+          !entry.internal &&
+          !entry.address.startsWith('169.254.'),
+      )?.address;
+    if (!address) throw new Error('需要一个可供沙箱访问的本机 IPv4 网络地址');
+    await writeFile(
+      path.join(directory, 'gateway.json'),
+      JSON.stringify({
+        address: `127.0.0.1:${ports[2]}`,
+        token: identity.frontend,
+        sandboxIds: Object.values(identity.scopes).map((scope) => scope.id),
+        sandbox: {
+          client: path.join(resources, 'host', 'sbx'),
+          socket: r.socket,
+          create: path.join(directory, 'create.json'),
+          terminal:
+            process.platform === 'darwin'
+              ? ['/usr/bin/open', '-a', 'Terminal']
+              : ['/usr/bin/x-terminal-emulator', '-e'],
+          commands: {
+            claude:
+              process.platform === 'darwin'
+                ? ['/usr/local/bin/claude']
+                : ['/opt/successbox-runtime/claude/node_modules/.bin/claude'],
+          },
+          gateways: Object.fromEntries(
+            Object.entries(identity.scopes).map(([agent, scope]) => [
+              agent,
+              {
+                url: `http://${address}:${ports[3]}`,
+                model: '',
+                llmToken: scope.llm,
+                mcpToken: scope.mcp,
+              },
+            ]),
+          ),
+          desktop: {
+            viewer: [
+              path.join(
+                resources,
+                'host',
+                'rdp',
+                process.platform === 'darwin' ? 'sdl-freerdp' : 'xfreerdp',
+              ),
+              '/v:{address}',
+            ],
+            command: [
+              '/usr/bin/python3',
+              '/opt/successbox-runtime/scripts/session.py',
+              'codex',
+            ],
+          },
+        },
+      }),
+      { mode: 0o600 },
+    );
+    const log = openSync(path.join(directory, 'gateway.log'), 'a', 0o600);
+    try {
+      r.gateway = spawn(
+        path.join(resources, 'host', 'sbx'),
+        [
+          'gateways',
+          '--exit-on-stdin-close',
+          '--cliproxy',
+          path.join(resources, 'host', 'cli-proxy-api'),
+          '--bifrost',
+          path.join(resources, 'host', 'bifrost-http'),
+          '--llm-config',
+          llmPath,
+          '--mcp-dir',
+          path.join(directory, 'mcp'),
+          '--mcp-port',
+          String(ports[1]),
+          '--control-listen',
+          `127.0.0.1:${ports[2]}`,
+          '--data-listen',
+          `${address}:${ports[3]}`,
+          '--control-db',
+          path.join(directory, 'control.db'),
+          '--control-frontend-token',
+          identity.frontend,
+          '--control-gateway-token',
+          identity.gateway,
+          '--control-agent-token',
+          identity.agent,
+        ],
+        { stdio: ['pipe', log, log] },
+      );
+    } finally {
+      closeSync(log);
+    }
+    let failure = false;
+    r.gateway.once('error', () => {
+      failure = true;
+    });
+    r.gateway.once('exit', () => {
+      failure = true;
+      this.state.services.llmGateway = this.state.services.mcpGateway = 'down';
+      this.changed();
+    });
+    const deadline = Date.now() + 60_000;
+    while (true) {
+      if (failure || this.stopped) throw new Error('网关启动已停止');
+      try {
+        const response = await fetch(`http://127.0.0.1:${ports[0]}/v1/models`, {
+          headers: { Authorization: `Bearer ${identity.scopes.codex.llm}` },
+          signal: AbortSignal.timeout(1000),
+        });
+        if (response.ok) break;
+      } catch {
+        /* Native gateway is still starting. */
+      }
+      if (Date.now() > deadline) throw new Error('网关启动超时');
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    this.state.services.llmGateway = 'ok';
+    void this.watchCodexCatalog();
+    this.loadProviders();
+    this.state.firstRun =
+      !this.state.agents.codex.providers.length &&
+      !this.state.agents.claude.providers.length;
+    this.state.agents.codex.protection =
+      this.state.agents.claude.protection = true;
+  }
+
+  private async watchCodexCatalog() {
+    const r = this.runtime!;
+    const endpoint = `http://127.0.0.1:${r.ports.mcp}/mcp`;
+    const authorization = `Bearer ${r.identity.scopes.codex.mcp}`;
+    while (!this.stopped) {
+      let session = '';
+      try {
+        const initialized = await fetch(endpoint, {
+          method: 'POST',
+          signal: AbortSignal.any([
+            this.lifetime.signal,
+            AbortSignal.timeout(5000),
+          ]),
+          headers: {
+            Authorization: authorization,
+            'Content-Type': 'application/json',
+            Accept: 'application/json, text/event-stream',
+          },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: 1,
+            method: 'initialize',
+            params: {
+              protocolVersion: '2025-06-18',
+              capabilities: {},
+              clientInfo: {
+                name: 'successbox-desktop',
+                version: app.getVersion(),
+              },
+            },
+          }),
+        });
+        if (!initialized.ok || (await initialized.json()).error)
+          throw new Error('MCP initialization failed');
+        session = initialized.headers.get('Mcp-Session-Id') ?? '';
+        if (!session) throw new Error('MCP session missing');
+        const response = await fetch(endpoint, {
+          signal: this.lifetime.signal,
+          headers: {
+            Authorization: authorization,
+            'Mcp-Session-Id': session,
+            Accept: 'text/event-stream',
+          },
+        });
+        if (!response.ok || !response.body)
+          throw new Error('MCP notifications unavailable');
+        this.state.services.mcpGateway = 'ok';
+        this.changed();
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let pending = '';
+        while (!this.stopped) {
+          const next = await reader.read();
+          if (next.done) break;
+          pending += decoder.decode(next.value, { stream: true });
+          const events = pending.split(/\r?\n\r?\n/);
+          pending = events.pop()!;
+          for (const event of events) {
+            const data = event
+              .split(/\r?\n/)
+              .filter((line) => line.startsWith('data:'))
+              .map((line) => line.slice(5).trimStart())
+              .join('\n');
+            if (
+              !data ||
+              JSON.parse(data).method !== 'notifications/tools/list_changed'
+            )
+              continue;
+            // This notification follows credential resolution and Bifrost grants.
+            // An APPROVED control event arrives earlier and is insufficient.
+            for (const run of this.state.runs.filter(
+              (run) =>
+                run.agent === 'codex' &&
+                run.status === 'running' &&
+                run.sandboxId,
+            )) {
+              try {
+                await promisify(execFile)(
+                  path.join(r.resources, 'host', 'sbx'),
+                  [
+                    '--socket',
+                    r.socket,
+                    'exec',
+                    '--sandbox',
+                    run.sandboxId!,
+                    '--',
+                    process.platform === 'darwin'
+                      ? '/usr/local/bin/node'
+                      : '/opt/successbox-runtime/node',
+                    '/opt/successbox-runtime/scripts/reload-mcp.mjs',
+                  ],
+                  { timeout: 20000 },
+                );
+                this.state.terminalMessage = 'MCP 工具目录已更新';
+              } catch {
+                this.state.terminalMessage =
+                  'MCP 已安装，但 Codex 工具目录刷新失败；请重新打开本次桌面';
+              }
+              this.changed();
+            }
+          }
+        }
+      } catch {
+        if (!this.stopped) {
+          this.state.services.mcpGateway = 'down';
+          this.changed();
+        }
+      } finally {
+        if (session)
+          await fetch(endpoint, {
+            method: 'DELETE',
+            signal: AbortSignal.timeout(1000),
+            headers: {
+              Authorization: authorization,
+              'Mcp-Session-Id': session,
+            },
+          }).catch(() => undefined);
+      }
+      if (!this.stopped)
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+  }
+
+  private readLLM(): NativeLLM {
+    if (!this.runtime) throw new Error('账号管理需要内置运行时');
+    return JSON.parse(
+      readFileSync(path.join(this.runtime.directory, 'llm.json'), 'utf8'),
+    );
+  }
+
+  private async writeLLM(configuration: NativeLLM) {
+    // CLIProxyAPI watches the config inode. Keep it in place; replacing the
+    // inode can detach subsequent updates from its fsnotify watch on Linux.
+    // Account changes are serialized and its watcher ignores partial writes.
+    const filename = path.join(this.runtime!.directory, 'llm.json');
+    await writeFile(filename, JSON.stringify(configuration, null, 2), {
+      mode: 0o600,
+      flush: true,
+    });
+  }
+
+  private changeAccounts(update: (config: NativeLLM) => Promise<void> | void) {
+    const operation = this.accountChanges.then(async () => {
+      const configuration = this.readLLM();
+      await update(configuration);
+      await this.writeLLM(configuration);
+      this.loadProviders();
+      this.state.firstRun = false;
+      this.changed();
+    });
+    this.accountChanges = operation.catch(() => undefined);
+    return operation;
+  }
+
+  private loadProviders() {
+    const config = this.readLLM();
+    this.providerSelectors.clear();
+    for (const agent of ['codex', 'claude'] as const) {
+      const selected =
+        config.plugins.configs.successbox.bindings[
+          this.runtime!.identity.scopes[agent].llm
+        ]?.[agent];
+      const providers: Provider[] = config['api-keys'][agent].map(
+        (entry, index) => {
+          // UI identities must survive deletion of an earlier native config entry.
+          // The private HMAC key prevents exposing a digest of an upstream key.
+          const id =
+            'api-' +
+            createHmac('sha256', this.runtime!.identity.admin)
+              .update(JSON.stringify([agent, entry['base-url'], entry.keys]))
+              .digest('hex');
+          const selector = `${entry['base-url']}#${index}`;
+          this.providerSelectors.set(id, selector);
+          return {
+            id,
+            name: entry.name,
+            kind: 'apiKey',
+            detail: entry['base-url'],
+            active: selected === selector,
+            preset: `${agent}-custom`,
+          };
+        },
+      );
+      for (const filename of readdirSync(config.oauth['auth-dir']).filter(
+        (name) => name.endsWith('.json'),
+      )) {
+        const auth = JSON.parse(
+          readFileSync(path.join(config.oauth['auth-dir'], filename), 'utf8'),
+        );
+        if (auth.type !== agent) continue;
+        providers.push({
+          id: filename,
+          name: agent === 'codex' ? 'ChatGPT 订阅' : 'Claude 订阅',
+          kind: 'subscription',
+          detail: auth.refresh_token
+            ? 'Successbox 登录'
+            : '导入的当前登录；过期后可重新登录',
+          active: selected === filename,
+          preset:
+            agent === 'codex' ? 'chatgpt-subscription' : 'claude-subscription',
+        });
+      }
+      this.state.agents[agent].providers = providers;
+    }
+    this.changed();
+  }
+
+  private async startSandbox() {
+    const r = this.runtime!;
+    if (r.sandbox) {
+      if (r.sandbox.exitCode !== null || r.sandbox.signalCode !== null)
+        throw new Error('沙箱服务已退出，请重新打开 Successbox');
+      return;
+    }
+    this.state.terminalMessage = '正在启动沙箱服务';
+    this.changed();
+    const assets = path.join(
+      app.getPath('userData'),
+      'runtime',
+      app.getVersion() +
+        '-' +
+        JSON.parse(
+          readFileSync(path.join(r.resources, 'manifest.json'), 'utf8'),
+        ).versions.commit.slice(0, 12),
+    );
+    await mkdir(assets, { recursive: true, mode: 0o700 });
+    if (
+      process.platform === 'darwin' &&
+      !existsSync(path.join(assets, 'rootfs', 'etc', 'os-release'))
+    ) {
+      const unpacking = await mkdtemp(path.join(assets, '.extract-'));
+      try {
+        await promisify(execFile)('/usr/bin/tar', [
+          '-xzpf',
+          path.join(r.resources, 'guest', 'rootfs.tar.gz'),
+          '-C',
+          unpacking,
+        ]);
+        await rename(
+          path.join(unpacking, 'rootfs'),
+          path.join(assets, 'rootfs'),
+        );
+      } finally {
+        await rm(unpacking, { recursive: true, force: true });
+      }
+    }
+    // A stale socket can only belong to this app's private state. Never unlink
+    // a live service socket: probe it before creating a replacement.
+    if (existsSync(r.socket)) {
+      try {
+        await promisify(execFile)(
+          path.join(r.resources, 'host', 'sbx'),
+          ['--socket', r.socket, 'close', 'readiness-probe'],
+          { timeout: 2000 },
+        );
+        throw new Error('另一个沙箱服务仍在使用此配置');
+      } catch (error) {
+        if (
+          error instanceof Error &&
+          error.message === '另一个沙箱服务仍在使用此配置'
+        )
+          throw error;
+        await rm(r.socket);
+      }
+    }
+    const log = openSync(path.join(r.directory, 'sandbox.log'), 'a', 0o600);
+    const linux = path.join(r.resources, 'linux');
+    try {
+      if (process.platform === 'darwin') {
+        r.sandbox = spawn(
+          path.join(r.resources, 'host', 'successbox-apple'),
+          [
+            '--exit-on-stdin-close',
+            '--socket',
+            r.socket,
+            '--state',
+            path.dirname(r.directory),
+            '--kernel',
+            path.join(r.resources, 'guest', 'vmlinux-arm64'),
+            '--initfs',
+            path.join(r.resources, 'guest', 'initfs.ext4'),
+            '--linux-rootfs',
+            path.join(assets, 'rootfs'),
+            '--runtime-directory',
+            linux,
+            '--runtime-memory-mib',
+            '8192',
+            '--host-home',
+            homedir(),
+            '--network',
+            'slirp4netns',
+          ],
+          { stdio: ['pipe', log, log] },
+        );
+      } else {
+        r.sandbox = spawn(
+          '/usr/bin/pkexec',
+          [
+            path.join(linux, 'successbox-gvisor'),
+            '--socket',
+            r.socket,
+            '--socket-uid',
+            String(userInfo().uid),
+            '--exit-on-stdin-close',
+            '--state',
+            r.directory,
+            '--runsc',
+            path.join(linux, 'runsc'),
+            '--worktrees',
+            path.join(linux, 'worktrees'),
+            '--network',
+            'slirp4netns',
+            '--slirp4netns',
+            '/usr/bin/slirp4netns',
+          ],
+          { stdio: ['pipe', log, log] },
+        );
+      }
+    } finally {
+      closeSync(log);
+    }
+    let failure = false;
+    r.sandbox.once('error', () => {
+      failure = true;
+    });
+    r.sandbox.once('exit', () => {
+      failure = true;
+      this.state.services.sandbox = 'down';
+      this.changed();
+    });
+    const deadline = Date.now() + 120_000;
+    while (true) {
+      if (failure || this.stopped)
+        throw new Error('沙箱启动已停止或系统授权被取消');
+      try {
+        await promisify(execFile)(
+          path.join(r.resources, 'host', 'sbx'),
+          ['--socket', r.socket, 'close', 'readiness-probe'],
+          { timeout: 2000 },
+        );
+        break;
+      } catch {
+        /* The private control socket is not ready yet. */
+      }
+      if (Date.now() > deadline) throw new Error('沙箱启动超时');
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    this.state.services.sandbox = 'ok';
+    this.changed();
+  }
+
   private unavailable(): never {
     throw new Error('此功能尚未接入真实后端');
   }
   async setProtection() {
     this.unavailable();
   }
-  async activateProvider() {
-    this.unavailable();
+  async activateProvider(agent: AgentId, id: string) {
+    await this.initialization;
+    return this.changeAccounts(async (config) => {
+      if (
+        !this.state.agents[agent]?.providers.some(
+          (provider) => provider.id === id,
+        )
+      )
+        throw new Error('账号不存在');
+      config.plugins.configs.successbox.bindings[
+        this.runtime!.identity.scopes[agent].llm
+      ] = {
+        [agent]: this.providerSelectors.get(id) ?? id,
+      };
+    });
   }
-  async addProvider() {
-    this.unavailable();
+  async addProvider(input: NewProvider) {
+    await this.initialization;
+    if (!['codex', 'claude'].includes(input.agent))
+      throw new Error('未知 Agent');
+    return this.changeAccounts(async (config) => {
+      if (input.kind === 'subscription') {
+        const previous = new Map(
+          (await readdir(config.oauth['auth-dir'])).map((name) => [
+            name,
+            statSync(path.join(config.oauth['auth-dir'], name)).mtimeMs,
+          ]),
+        );
+        try {
+          await promisify(execFile)(
+            path.join(this.runtime!.resources, 'host', 'cli-proxy-api'),
+            [
+              '-config',
+              path.join(this.runtime!.directory, 'llm.json'),
+              `-${input.agent}-login`,
+            ],
+            { timeout: 300_000, signal: this.lifetime.signal },
+          );
+        } catch {
+          throw new Error('登录未完成，请重试');
+        }
+        const files = (await readdir(config.oauth['auth-dir'])).filter(
+          (file) =>
+            file.endsWith('.json') &&
+            previous.get(file) !==
+              statSync(path.join(config.oauth['auth-dir'], file)).mtimeMs,
+        );
+        const candidate = files.find(
+          (file) =>
+            JSON.parse(
+              readFileSync(path.join(config.oauth['auth-dir'], file), 'utf8'),
+            ).type === input.agent,
+        );
+        if (!candidate) throw new Error('登录程序没有保存新账号');
+        await chmod(path.join(config.oauth['auth-dir'], candidate), 0o600);
+        config.plugins.configs.successbox.bindings[
+          this.runtime!.identity.scopes[input.agent].llm
+        ] = {
+          [input.agent]: candidate,
+        };
+      } else {
+        if (!input.apiKey?.trim() || !input.name?.trim())
+          throw new Error('请填写账号名称和 API Key');
+        const endpoint = new URL(
+          input.endpoint ||
+            (input.agent === 'codex'
+              ? 'https://api.openai.com/v1'
+              : 'https://api.anthropic.com'),
+        );
+        if (
+          !['https:', 'http:'].includes(endpoint.protocol) ||
+          endpoint.username ||
+          endpoint.password ||
+          endpoint.search ||
+          endpoint.hash
+        )
+          throw new Error('请填写不包含账号或参数的 HTTP(S) 服务地址');
+        const base = endpoint.toString().replace(/\/$/, '');
+        const entries = config['api-keys'][input.agent];
+        let index = entries.findIndex(
+          (entry) =>
+            entry['base-url'] === base &&
+            entry.keys.some((key) => key['api-key'] === input.apiKey),
+        );
+        if (index < 0) {
+          index = entries.length;
+          entries.push({
+            name: input.name.trim(),
+            'base-url': base,
+            keys: [{ 'api-key': input.apiKey }],
+          });
+        }
+        config.plugins.configs.successbox.bindings[
+          this.runtime!.identity.scopes[input.agent].llm
+        ] = {
+          [input.agent]: `${base}#${index}`,
+        };
+      }
+    });
   }
-  async reloginProvider() {
-    this.unavailable();
+  async reloginProvider(agent: AgentId, id: string) {
+    const provider = this.state.agents[agent]?.providers.find(
+      (candidate) => candidate.id === id,
+    );
+    if (!provider || provider.kind !== 'subscription')
+      throw new Error('请选择订阅账号');
+    await this.addProvider({
+      agent,
+      kind: 'subscription',
+      name: provider.name,
+      preset: provider.preset,
+    });
   }
-  async removeProvider() {
-    this.unavailable();
+  async removeProvider(agent: AgentId, id: string) {
+    await this.initialization;
+    return this.changeAccounts(async (config) => {
+      const provider = this.state.agents[agent]?.providers.find(
+        (candidate) => candidate.id === id,
+      );
+      if (!provider || provider.active) throw new Error('请先切换到另一个账号');
+      if (provider.kind === 'subscription') {
+        // IDs are obtained from our own provider list, never used as arbitrary paths.
+        await rm(path.join(config.oauth['auth-dir'], id));
+      } else {
+        const selector = this.providerSelectors.get(id)!;
+        const index = Number(selector.slice(selector.lastIndexOf('#') + 1));
+        const binding =
+          config.plugins.configs.successbox.bindings[
+            this.runtime!.identity.scopes[agent].llm
+          ];
+        const selected = binding?.[agent];
+        const selectedIndex = selected?.includes('#')
+          ? Number(selected.slice(selected.lastIndexOf('#') + 1))
+          : -1;
+        config['api-keys'][agent].splice(index, 1);
+        if (selectedIndex > index)
+          binding[agent] =
+            `${config['api-keys'][agent][selectedIndex - 1]['base-url']}#${selectedIndex - 1}`;
+      }
+    });
   }
   async addMcp() {
     this.unavailable();
@@ -497,12 +1360,16 @@ class GatewayBackend implements Backend {
     return this.unavailable();
   }
   async launchInTerminal(agent: AgentId) {
+    await this.initialization;
     if (agent !== 'claude' && agent !== 'codex') throw new Error('未知 Agent');
     if (process.platform !== 'darwin' && process.platform !== 'linux')
       throw new Error('当前仅支持 macOS 和 Linux');
     const file =
       process.env.SUCCESSBOX_GATEWAY_CONFIG ??
-      path.join(app.getPath('userData'), 'gateway.json');
+      path.join(
+        this.runtime?.directory ?? app.getPath('userData'),
+        'gateway.json',
+      );
     const configuration = JSON.parse(await readFile(file, 'utf8')) as {
       sandbox?: {
         client: string;
@@ -529,6 +1396,134 @@ class GatewayBackend implements Backend {
         >;
       };
     };
+    let desktopPreparation: object | undefined;
+    let managedCreate: Record<string, unknown> | undefined;
+    if (this.runtime) {
+      if (
+        !this.state.agents[agent].providers.some((provider) => provider.active)
+      )
+        throw new Error('请先导入或添加一个模型账号');
+      await (this.sandboxStart ??= this.startSandbox());
+      const r = this.runtime;
+      const sandbox = configuration.sandbox!;
+      const gateways = sandbox.gateways!;
+      let codexSettings = existsSync(
+        path.join(homedir(), '.codex', 'config.toml'),
+      )
+        ? parseToml(
+            await readFile(
+              path.join(homedir(), '.codex', 'config.toml'),
+              'utf8',
+            ),
+          )
+        : {};
+      const response = await fetch(
+        `http://127.0.0.1:${r.ports.llm}/v1/models`,
+        {
+          headers: { Authorization: `Bearer ${r.identity.scopes[agent].llm}` },
+          signal: AbortSignal.timeout(5000),
+        },
+      );
+      if (!response.ok) throw new Error('模型网关暂不可用');
+      const catalog = (await response.json()) as {
+        data?: Array<{ id: string }>;
+      };
+      const claudeSettingsPath = path.join(
+        homedir(),
+        '.claude',
+        'settings.json',
+      );
+      const claudeSettings =
+        agent === 'claude' && existsSync(claudeSettingsPath)
+          ? JSON.parse(await readFile(claudeSettingsPath, 'utf8'))
+          : {};
+      const originalModel =
+        agent === 'codex'
+          ? typeof codexSettings.model === 'string'
+            ? codexSettings.model
+            : undefined
+          : (claudeSettings.env?.ANTHROPIC_MODEL ?? claudeSettings.model);
+      const model =
+        originalModel ||
+        catalog.data?.find((entry) =>
+          agent === 'codex'
+            ? entry.id.startsWith('gpt-')
+            : entry.id.startsWith('claude-'),
+        )?.id ||
+        catalog.data?.[0]?.id;
+      if (!model) throw new Error('当前账号没有可用模型');
+      gateways[agent]!.model = model;
+      const gateway = gateways.codex!;
+      codexSettings = {
+        ...codexSettings,
+        model,
+        model_provider: 'successbox',
+        model_providers: {
+          successbox: {
+            name: 'Successbox',
+            base_url: gateway.url + '/v1',
+            wire_api: 'responses',
+            requires_openai_auth: false,
+            env_key: 'SUCCESSBOX_LLM_TOKEN',
+          },
+        },
+        mcp_servers: {
+          successbox: {
+            url: gateway.url + '/mcp',
+            bearer_token_env_var: 'SUCCESSBOX_MCP_TOKEN',
+          },
+        },
+      };
+      const uid = process.platform === 'darwin' ? 0 : userInfo().uid;
+      const gid = process.platform === 'darwin' ? 0 : userInfo().gid;
+      const mounts =
+        process.platform === 'darwin'
+          ? [{ source: homedir(), destination: homedir() }]
+          : [
+              {
+                source: path.join(r.resources, 'linux'),
+                destination: '/opt/successbox-runtime',
+                readOnly: true,
+              },
+              {
+                source: path.join(
+                  r.resources,
+                  'linux',
+                  'agent',
+                  'usr',
+                  'lib',
+                  'chatgpt',
+                ),
+                destination: '/usr/lib/chatgpt',
+                readOnly: true,
+              },
+            ];
+      managedCreate = {
+        rootfs: '/',
+        workingDir: homedir(),
+        desktop: agent === 'codex',
+        mounts,
+        env: [
+          `HOME=${homedir()}`,
+          `USER=${userInfo().username}`,
+          'LANG=C.UTF-8',
+          'TERM=xterm-256color',
+          `SUCCESSBOX_LLM_TOKEN=${gateway.llmToken}`,
+          `SUCCESSBOX_MCP_TOKEN=${gateway.mcpToken}`,
+        ],
+      };
+      desktopPreparation = {
+        home: homedir(),
+        uid,
+        gid,
+        password: randomBytes(24).toString('hex'),
+        url: gateway.url,
+        codexConfig: stringifyToml(codexSettings),
+        codexToken: gateway.llmToken,
+        claudeToken: gateways.claude!.llmToken,
+        claudeMcpToken: gateways.claude!.mcpToken,
+      };
+    }
     const sandbox = configuration.sandbox;
     if (agent === 'codex' && !sandbox?.desktop)
       throw new Error('Codex Desktop 尚未配置桌面连接，无法打开应用');
@@ -554,7 +1549,8 @@ class GatewayBackend implements Backend {
       }
       if (!desktop.viewer?.some((arg) => arg.includes('{address}')))
         throw new Error('RDP 客户端参数需要包含 {address}');
-      const request = JSON.parse(await readFile(sandbox.create, 'utf8'));
+      const request =
+        managedCreate ?? JSON.parse(await readFile(sandbox.create, 'utf8'));
       if (request.desktop !== true)
         throw new Error('桌面 Create 配置需要 desktop=true');
       const id = randomUUID();
@@ -586,14 +1582,10 @@ class GatewayBackend implements Backend {
           } finally {
             application?.kill('SIGTERM');
             this.changed();
-            app.removeListener('before-quit', onQuit);
+            this.closeRuns.delete(close);
           }
         })());
-      const onQuit = (event: Electron.Event) => {
-        event.preventDefault();
-        void close().finally(() => app.quit());
-      };
-      app.on('before-quit', onQuit);
+      this.closeRuns.add(close);
       this.state.runs.push({
         id,
         agent,
@@ -611,6 +1603,39 @@ class GatewayBackend implements Backend {
         ).stdout.trim();
         const run = this.state.runs.find((run) => run.id === id);
         if (run) run.sandboxId = sandboxId;
+        let rdpCredentials:
+          | { username: string; certificate: string }
+          | undefined;
+        if (desktopPreparation) {
+          const preparation = spawn(
+            sandbox.client,
+            [
+              ...prefix,
+              'exec',
+              '--sandbox',
+              sandboxId,
+              '--',
+              '/usr/bin/python3',
+              '/opt/successbox-runtime/scripts/session.py',
+              'prepare',
+            ],
+            { stdio: ['pipe', 'pipe', 'pipe'] },
+          );
+          let output = '';
+          preparation.stdout.on('data', (data: Buffer) => {
+            output = (output + data.toString()).slice(-65536);
+          });
+          const prepared = new Promise<void>((resolve, reject) => {
+            preparation.once('error', reject);
+            preparation.once('exit', (code) =>
+              code === 0 ? resolve() : reject(new Error('桌面环境准备失败')),
+            );
+          });
+          preparation.stderr.resume();
+          preparation.stdin.end(JSON.stringify(desktopPreparation));
+          await prepared;
+          rdpCredentials = JSON.parse(output.trim().split('\n').at(-1)!);
+        }
         if (desktop.prepare) {
           this.state.terminalMessage = '正在准备桌面应用';
           this.changed();
@@ -675,9 +1700,31 @@ class GatewayBackend implements Backend {
             }
           });
         }
-        const [executable, ...args] = desktop.viewer.map((arg) =>
+        let viewerArguments = desktop.viewer.map((arg) =>
           arg.replaceAll('{address}', address),
         );
+        if (rdpCredentials && desktopPreparation) {
+          const certificate = new X509Certificate(rdpCredentials.certificate);
+          const argsFile = path.join(directory, 'viewer.args');
+          await writeFile(
+            argsFile,
+            [
+              '/v:' + address,
+              '/u:' + rdpCredentials.username,
+              '/p:' + (desktopPreparation as { password: string }).password,
+              '/sec:tls',
+              '/cert:fingerprint:sha256:' +
+                certificate.fingerprint256.replaceAll(':', ''),
+              '/size:2560x1600',
+              '+dynamic-resolution',
+              '-gfx',
+              '/title:Successbox Codex Desktop',
+            ].join('\n') + '\n',
+            { mode: 0o600 },
+          );
+          viewerArguments = [desktop.viewer[0], '/args-from:file:' + argsFile];
+        }
+        const [executable, ...args] = viewerArguments;
         viewer = spawn(executable, args, { stdio: 'ignore' });
         viewer.once('exit', () => {
           void close();
@@ -717,8 +1764,8 @@ class GatewayBackend implements Backend {
       argv.some((value) => typeof value !== 'string' || !value)
     )
       throw new Error('Agent 启动参数必须是非空字符串数组');
-    const request = await readFile(sandbox.create, 'utf8');
-    const createRequest = JSON.parse(request) as {
+    const createRequest = (managedCreate ??
+      JSON.parse(await readFile(sandbox.create, 'utf8'))) as {
       workingDir?: string;
       working_dir?: string;
       env?: string[];
@@ -856,6 +1903,23 @@ class GatewayBackend implements Backend {
         ];
       }
     }
+    if (this.runtime && agent === 'claude') {
+      environment.set(
+        'CLAUDE_CONFIG_DIR',
+        `CLAUDE_CONFIG_DIR=${path.join(homedir(), '.claude')}`,
+      );
+      if (process.platform === 'linux')
+        argv = [
+          '/usr/bin/setpriv',
+          '--reuid',
+          String(userInfo().uid),
+          '--regid',
+          String(userInfo().gid),
+          '--clear-groups',
+          '--',
+          ...argv,
+        ];
+    }
     createRequest.env = [...environment.values()];
     const requestWithAgentEnvironment = JSON.stringify(createRequest, null, 2);
     const directory = await mkdtemp(
@@ -905,9 +1969,14 @@ class GatewayBackend implements Backend {
           "trap 'exit 143' TERM",
           `sandbox_id=$(${command} create ${quote(path.join(directory, 'create.json'))}) || exit $?`,
           `printf '%s\\n' "$sandbox_id" > ${quote(identity)}`,
+          ...(desktopPreparation
+            ? [
+                `printf '%s' ${quote(Buffer.from(JSON.stringify(desktopPreparation)).toString('base64'))} | ${command} exec --sandbox "$sandbox_id" -- /bin/sh -ec ${quote('base64 -d | /usr/bin/python3 /opt/successbox-runtime/scripts/session.py configure')} || exit $?`,
+              ]
+            : []),
           ...(agentConfiguration
             ? [
-                `printf '%s' ${quote(Buffer.from(agentConfiguration.content, 'utf8').toString('base64'))} | ${command} exec --sandbox "$sandbox_id" -- /bin/sh -ec ${quote('umask 077; mkdir -m 700 "$1"; base64 -d > "$1/$2"')} successbox-config ${quote(agentConfiguration.directory)} ${quote(agentConfiguration.name)} || exit $?`,
+                `printf '%s' ${quote(Buffer.from(agentConfiguration.content, 'utf8').toString('base64'))} | ${command} exec --sandbox "$sandbox_id" -- /bin/sh -ec ${quote('umask 077; mkdir -m 700 "$1"; base64 -d > "$1/$2"' + (this.runtime && process.platform === 'linux' ? `; chown ${userInfo().uid}:${userInfo().gid} "$1" "$1/$2"` : ''))} successbox-config ${quote(agentConfiguration.directory)} ${quote(agentConfiguration.name)} || exit $?`,
               ]
             : []),
           `printf '%s\\n' ${quote('Successbox · ' + AGENT_NAMES[agent] + ' · 沙箱终端')}`,
@@ -976,10 +2045,147 @@ class GatewayBackend implements Backend {
       throw error;
     }
   }
-  async importConfigs() {
-    this.unavailable();
+  async importConfigs(
+    agents: AgentId[],
+    options: { commandLine: boolean; protection: boolean },
+  ) {
+    await this.initialization;
+    if (!this.runtime) throw new Error('配置导入需要内置运行时');
+    // Validate and prepare all selected inputs before changing either gateway.
+    const inputs: Array<{
+      agent: AgentId;
+      key?: string;
+      endpoint?: string;
+      name: string;
+      auth?: Record<string, unknown>;
+    }> = [];
+    for (const agent of new Set(agents)) {
+      if (agent === 'codex') {
+        const source = path.join(homedir(), '.codex');
+        const settings = existsSync(path.join(source, 'config.toml'))
+          ? parseToml(await readFile(path.join(source, 'config.toml'), 'utf8'))
+          : {};
+        const auth = existsSync(path.join(source, 'auth.json'))
+          ? JSON.parse(await readFile(path.join(source, 'auth.json'), 'utf8'))
+          : {};
+        const providerName =
+          typeof settings.model_provider === 'string'
+            ? settings.model_provider
+            : 'openai';
+        const providers = settings.model_providers as
+          | Record<string, Record<string, unknown>>
+          | undefined;
+        const provider = providers?.[providerName] ?? {};
+        const key =
+          (typeof provider.env_key === 'string'
+            ? process.env[provider.env_key]
+            : undefined) || auth.OPENAI_API_KEY;
+        if (typeof key === 'string' && key)
+          inputs.push({
+            agent,
+            key,
+            endpoint:
+              typeof provider.base_url === 'string'
+                ? provider.base_url
+                : undefined,
+            name:
+              typeof provider.name === 'string' ? provider.name : 'Codex API',
+          });
+        else if (auth.tokens?.access_token && auth.tokens?.account_id)
+          inputs.push({
+            agent,
+            name: 'ChatGPT 订阅',
+            auth: {
+              type: 'codex',
+              access_token: auth.tokens.access_token,
+              account_id: auth.tokens.account_id,
+              id_token: auth.tokens.id_token,
+              // The host agent owns its refresh token. Importing it into a second
+              // refresher could rotate the host login; a fresh login has its own store.
+            },
+          });
+        else
+          throw new Error(
+            'Codex 配置中没有可用账号，请添加 API Key 或登录订阅',
+          );
+      } else if (agent === 'claude') {
+        const source = path.join(homedir(), '.claude');
+        const settings = existsSync(path.join(source, 'settings.json'))
+          ? JSON.parse(
+              await readFile(path.join(source, 'settings.json'), 'utf8'),
+            )
+          : {};
+        const env = settings.env ?? {};
+        const key =
+          env.ANTHROPIC_API_KEY ||
+          env.ANTHROPIC_AUTH_TOKEN ||
+          process.env.ANTHROPIC_API_KEY;
+        if (typeof key === 'string' && key)
+          inputs.push({
+            agent,
+            key,
+            endpoint: env.ANTHROPIC_BASE_URL,
+            name: 'Claude API',
+          });
+        else {
+          const credentials = existsSync(path.join(source, '.credentials.json'))
+            ? JSON.parse(
+                await readFile(path.join(source, '.credentials.json'), 'utf8'),
+              ).claudeAiOauth
+            : undefined;
+          if (!credentials?.accessToken)
+            throw new Error(
+              'Claude 配置中没有可导入账号，请添加 API Key 或登录订阅',
+            );
+          inputs.push({
+            agent,
+            name: 'Claude 订阅',
+            auth: {
+              type: 'claude',
+              access_token: credentials.accessToken,
+              expired: new Date(credentials.expiresAt).toISOString(),
+            },
+          });
+        }
+      } else throw new Error('未知 Agent');
+    }
+    for (const input of inputs) {
+      if (input.auth) {
+        await this.changeAccounts(async (config) => {
+          const filename = `${input.agent}.json`;
+          await writeFile(
+            path.join(config.oauth['auth-dir'], filename),
+            JSON.stringify(input.auth),
+            {
+              mode: 0o600,
+            },
+          );
+          config.plugins.configs.successbox.bindings[
+            this.runtime!.identity.scopes[input.agent].llm
+          ] = { [input.agent]: filename };
+        });
+      } else
+        await this.addProvider({
+          agent: input.agent,
+          kind: 'apiKey',
+          name: input.name,
+          preset: `${input.agent}-custom`,
+          apiKey: input.key,
+          endpoint: input.endpoint,
+        });
+    }
+    this.loadProviders();
+    this.state.firstRun = false;
+    // This desktop release launches from the UI. Importing accounts does not
+    // install host shell wrappers or turn off sandbox isolation.
+    this.state.settings.commandLine = false;
+    this.changed();
+    void options;
   }
-  async dismissWelcome() {}
+  async dismissWelcome() {
+    this.state.firstRun = false;
+    this.changed();
+  }
   async updateSettings() {
     this.unavailable();
   }

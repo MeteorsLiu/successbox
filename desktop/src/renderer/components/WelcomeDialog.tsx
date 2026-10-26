@@ -21,8 +21,8 @@ export function WelcomeDialog({ onClose }: { onClose(): void }) {
     claude: true,
     codex: true,
   });
-  const [commandLine, setCommandLine] = useState(true);
-  const [protection, setProtection] = useState(true);
+  const commandLine = false;
+  const protection = true;
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -84,7 +84,7 @@ export function WelcomeDialog({ onClose }: { onClose(): void }) {
       }
     >
       <p className="muted" style={{ marginTop: 0 }}>
-        找到了以下配置。导入后，可以在这里统一管理账号和 MCP。
+        导入现有模型账号。MCP 可以在启动 Agent 后通过安装工具添加。
       </p>
       {!candidates && (
         <div className="muted">
@@ -119,34 +119,6 @@ export function WelcomeDialog({ onClose }: { onClose(): void }) {
           </label>
         ))}
       </div>
-      <label className="check" style={{ marginTop: 14 }}>
-        <input
-          type="checkbox"
-          checked={commandLine}
-          onChange={(e) => setCommandLine(e.target.checked)}
-        />
-        <span>
-          <b>让终端里的 claude / codex 通过 Successbox 启动</b>
-          <br />
-          <span className="muted small">
-            在 <code>~/.local/bin</code> 中安装同名命令，可以随时在设置里关闭
-          </span>
-        </span>
-      </label>
-      <label className="check">
-        <input
-          type="checkbox"
-          checked={protection}
-          onChange={(e) => setProtection(e.target.checked)}
-        />
-        <span>
-          <b>默认开启沙箱保护</b>
-          <br />
-          <span className="muted small">
-            Agent 的改动另存为 worktree 或副本，不会修改本机的文件和配置
-          </span>
-        </span>
-      </label>
       <div className="note">
         原配置文件不会被修改。导入的 Key 由 Successbox 保管，沙箱中的 Agent
         读不到原文件里的 Key。

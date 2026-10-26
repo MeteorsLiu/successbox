@@ -58,6 +58,77 @@ export function AgentPage({
                 : '在终端中打开'}
           </button>
         </div>
+        <div className="h2">
+          模型账号
+          <span className="spacer" />
+          <button
+            className="btn sm"
+            onClick={() =>
+              toast.run(
+                api.importConfigs([agent], {
+                  commandLine: false,
+                  protection: true,
+                }),
+                '账号已导入',
+              )
+            }
+          >
+            导入本机账号
+          </button>
+          <button className="btn sm" onClick={() => setAdding(true)}>
+            ＋ 添加
+          </button>
+        </div>
+        {providers.map((provider) => (
+          <div className="card row" key={provider.id}>
+            <div style={{ flex: 1 }}>
+              <b>{provider.name}</b>
+              <div className="muted small">{provider.detail}</div>
+            </div>
+            {provider.active ? (
+              <span className="pill blue">使用中</span>
+            ) : (
+              <button
+                className="btn sm"
+                onClick={() =>
+                  toast.run(
+                    api.activateProvider(agent, provider.id),
+                    '账号已切换',
+                  )
+                }
+              >
+                启用
+              </button>
+            )}
+            {provider.kind === 'subscription' && (
+              <button className="btn sm" onClick={() => relogin(provider)}>
+                重新登录
+              </button>
+            )}
+            <button
+              className="btn sm ghost"
+              disabled={provider.active}
+              onClick={() => setRemoving(provider)}
+            >
+              删除
+            </button>
+          </div>
+        ))}
+        {adding && (
+          <AddProviderDialog agent={agent} onClose={() => setAdding(false)} />
+        )}
+        {removing && (
+          <ConfirmDialog
+            title={`删除「${removing.name}」？`}
+            confirm="删除"
+            onClose={() => setRemoving(null)}
+            onConfirm={() =>
+              toast.run(api.removeProvider(agent, removing.id), '已删除')
+            }
+          >
+            <p>只移除 Successbox 保存的账号。</p>
+          </ConfirmDialog>
+        )}
         {state.terminalMessage && <p role="status">{state.terminalMessage}</p>}
         {runs.map((run) => (
           <div className="card" key={run.id}>
