@@ -678,6 +678,9 @@ class GatewayBackend implements Backend {
           },
           observability: { logs: { 'request-log': false, debug: false } },
         };
+    // Preserve the client's declared tools. The proxy's default image tool
+    // injection makes ordinary text requests fail on text-only API accounts.
+    llm.multimedia = { 'disable-image-generation': 'passthrough' };
     llm.server = { host: '127.0.0.1', port: ports[0] };
     llm.access['api-keys'] = Object.values(identity.scopes).map(
       (scope) => scope.llm,
