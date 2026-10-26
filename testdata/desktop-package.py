@@ -13,6 +13,10 @@ import tempfile
 import time
 
 runtime = Path(sys.argv[1]).resolve()
+checkout = str(Path(__file__).resolve().parents[1])
+for item in runtime.rglob('*'):
+    if item.is_symlink():
+        assert not os.readlink(item).startswith(checkout + '/'), 'runtime link escapes into the build checkout: ' + str(item)
 work = Path(tempfile.mkdtemp(prefix='successbox-package-', dir='/var/tmp'))
 work.chmod(0o755)
 print('desktop validation logs:', work, flush=True)
