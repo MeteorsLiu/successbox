@@ -72,7 +72,11 @@ func (s *server) startWorktrees(ctx context.Context, id, dir string, log *os.Fil
 	if _, err := io.ReadFull(read, ready[:]); err != nil || ready[0] != 1 {
 		cmd.Process.Signal(syscall.SIGTERM)
 		waitErr := cmd.Wait()
-		return nil, fmt.Errorf("helper readiness: %v; exit: %v", err, waitErr)
+		diagnostic, _ := os.ReadFile(log.Name())
+		if len(diagnostic) > 4096 {
+			diagnostic = diagnostic[len(diagnostic)-4096:]
+		}
+		return nil, fmt.Errorf("helper readiness: %v; exit: %v: %s", err, waitErr, diagnostic)
 	}
 	return cmd, nil
 }

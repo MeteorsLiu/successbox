@@ -72,7 +72,10 @@ finally:
     if box:
         logs = subprocess.run(client + ['exec', '--sandbox', box, '--', '/bin/sh', '-c', 'cat /tmp/successbox-rdp.log /var/log/xrdp.log /var/log/xrdp-sesman.log'], capture_output=True, timeout=15)
         (work / 'guest.log').write_bytes(logs.stdout + logs.stderr)
-        subprocess.run(client + ['close', box], check=True, timeout=30)
+        for name in ('prepare.log', 'application.log', 'viewer.log', 'guest.log', 'backend.log'):
+            p = work / name
+            if p.exists(): print(name, p.read_text()[-6000:], flush=True)
+        closed = subprocess.run(client + ['close', box], timeout=30)
     for child in reversed(children):
         if child.poll() is None: child.terminate()
         child.wait(timeout=15)
@@ -83,4 +86,5 @@ finally:
         for name in ('prepare.log', 'application.log', 'viewer.log', 'guest.log', 'backend.log'):
             p = work / name
             if p.exists(): print(name, p.read_text()[-6000:], flush=True)
+assert closed.returncode == 0, 'sandbox Close failed'
 print('Close and backend EOF cleanup: PASS', flush=True)
