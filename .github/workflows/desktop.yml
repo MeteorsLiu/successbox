@@ -117,12 +117,6 @@ jobs:
         env:
           SUCCESSBOX_RELEASE: '1'
         run: npm run make -- --platform=${{ matrix.platform }} --arch=${{ matrix.arch }} --targets=${{ matrix.targets }}
-      - name: Verify the installed Linux desktop runtime
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get install -y xvfb
-          sudo apt-get install -y ./desktop/out/make/deb/*/*.deb
-          sudo xvfb-run -a python3 testdata/desktop-package.py /usr/lib/successbox/resources/runtime
       - name: Collect distribution and checksums
         env:
           TARGET: ${{ matrix.platform }}-${{ matrix.arch }}
@@ -146,6 +140,12 @@ jobs:
           path: dist/
           if-no-files-found: error
           compression-level: 0
+      - name: Verify the installed Linux desktop runtime
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get install -y xvfb
+          sudo apt-get install -y ./desktop/out/make/deb/*/*.deb
+          sudo xvfb-run -a python3 testdata/desktop-package.py /usr/lib/successbox/resources/runtime
 
   release:
     name: Publish tagged release
