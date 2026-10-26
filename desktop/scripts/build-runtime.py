@@ -76,25 +76,35 @@ with tempfile.TemporaryDirectory(prefix='successbox-build-') as scratch:
         # to this bundle. No Homebrew or build-machine path may remain.
         pending = [host / 'rdp' / client, *list((host / 'rdp/lib').glob('*.dylib'))]
         visited = set()
+        origins = {}
         while pending:
             binary = pending.pop().resolve()
             if binary in visited:
                 continue
             visited.add(binary)
-            dependencies = subprocess.check_output(['otool', '-L', binary], text=True).splitlines()[1:]
+            original = origins.get(binary, binary)
+            commands = subprocess.check_output(['otool', '-l', original], text=True).splitlines()
+            rpaths = [commands[i + 2].strip().split(' ', 2)[1] for i, line in enumerate(commands) if line.strip() == 'cmd LC_RPATH']
+            dependencies = subprocess.check_output(['otool', '-L', original], text=True).splitlines()[1:]
             for line in dependencies:
                 dependency = line.strip().split(' (', 1)[0]
                 if dependency.startswith(('/usr/lib/', '/System/Library/')):
                     continue
                 if dependency.startswith('@rpath/'):
-                    source = host / 'rdp/lib' / Path(dependency).name
+                    name = dependency.removeprefix('@rpath/')
+                    candidates = [host / 'rdp/lib' / name]
+                    candidates += [Path(entry.replace('@loader_path', str(original.parent))) / name for entry in rpaths]
+                    source = next((p for p in candidates if p.is_file()), None)
+                    if source is None:
+                        raise RuntimeError('Unresolved dylib ' + dependency + ' in ' + str(original))
                 elif dependency.startswith('@loader_path/'):
-                    source = (binary.parent / dependency.removeprefix('@loader_path/')).resolve()
+                    source = (original.parent / dependency.removeprefix('@loader_path/')).resolve()
                 else:
                     source = Path(dependency)
                 target = host / 'rdp/lib' / source.name
                 if not target.exists():
                     shutil.copy2(source, target)
+                    origins[target.resolve()] = source.resolve()
                 relative = os.path.relpath(target, binary.parent)
                 replacement = '@loader_path/' + relative
                 subprocess.run(['install_name_tool', '-change', dependency, replacement, binary], check=True)
