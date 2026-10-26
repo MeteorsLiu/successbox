@@ -5,6 +5,7 @@ package main
 import (
 	"encoding/binary"
 	"errors"
+	"log"
 	"path/filepath"
 	"strings"
 
@@ -116,6 +117,7 @@ func (m *manager) resolve(c *syscallEvent, dirfd int32, path string, follow bool
 			if err == nil && result.Link == nil {
 				mapped, err = m.prepare(req)
 				if err != nil {
+					log.Printf("worktree path failure: syscall=%s path=%q uid=%d: %v", c.Name, path, c.uid, err)
 					return "", err
 				}
 			}
@@ -196,6 +198,7 @@ func (m *manager) inspect(c *syscallEvent) error {
 			req.Path = m.original(cwd.Path)
 			private, err := m.prepare(req)
 			if err != nil {
+				log.Printf("worktree initial directory failure: cwd=%q uid=%d: %v", req.Path, c.uid, err)
 				return err
 			}
 			if private != "" && private != cwd.Path {

@@ -45,6 +45,8 @@ try:
     (work / 'prepare.log').write_text(prepare.stderr)
     assert prepare.returncode == 0, prepare.stderr
     rdp = json.loads(prepare.stdout.strip().splitlines()[-1])
+    permission_probe = 'import os;from pathlib import Path;os.setgid(1000);os.setuid(1000);p=Path(' + repr(str(home / '.codex/writability-probe')) + ');p.write_text("ok");p.unlink()'
+    subprocess.run(execute + ['python3', '-c', permission_probe], check=True, timeout=10)
     proxy = subprocess.Popen(client + ['display', '--sandbox', box, '--listen', '127.0.0.1:0'], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
     children.append(proxy)
     address = re.search(r'127\.0\.0\.1:\d+', proxy.stderr.readline())[0]
@@ -61,7 +63,16 @@ try:
     while True:
         assert viewer.poll() is None, 'RDP viewer exited'
         assert application.poll() is None, 'Codex Desktop exited'
-        probe = subprocess.run(execute + ['python3', '-c', 'import urllib.request,json;pages=json.load(urllib.request.urlopen("http://127.0.0.1:9333/json",timeout=2));assert any(p.get("type")=="page" for p in pages)'], capture_output=True, timeout=8)
+        script = """
+const pages=await(await fetch('http://127.0.0.1:9333/json/list')).json();
+const page=pages.find(p=>p.type==='page');if(!page)process.exit(1);
+const ws=new WebSocket(page.webSocketDebuggerUrl);
+const timer=setTimeout(()=>process.exit(1),4000);
+ws.onopen=()=>ws.send(JSON.stringify({id:1,method:'Runtime.evaluate',params:{expression:'!!document.querySelector("[contenteditable=true]")',returnByValue:true}}));
+ws.onmessage=e=>{const r=JSON.parse(e.data);if(r.id===1){clearTimeout(timer);ws.close();process.exit(r.result?.result?.value===true?0:1);}};
+ws.onerror=()=>process.exit(1);
+"""
+        probe = subprocess.run(execute + ['/opt/successbox-runtime/node', '--input-type=module', '-e', script], capture_output=True, timeout=8)
         if probe.returncode == 0:
             break
         assert time.monotonic() < deadline, 'Codex Desktop renderer readiness timeout'

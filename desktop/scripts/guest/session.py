@@ -14,8 +14,10 @@ mode = sys.argv[1]
 if mode in ('prepare', 'configure'):
     options = json.load(sys.stdin)
     home = Path(options['home'])
-    home.mkdir(parents=True, exist_ok=True)
     target_uid = options['uid']
+    if not home.exists():
+        home.mkdir(parents=True, mode=0o700)
+        os.chown(home, target_uid, options['gid'])
     if mode == 'prepare':
         desktop_uid = target_uid if target_uid else 1000
         try:
@@ -26,7 +28,9 @@ if mode in ('prepare', 'configure'):
         # The password and all account-file changes exist only in this sandbox.
         subprocess.run(['chpasswd'], input=desktop_user.pw_name + ':' + options['password'] + '\n', text=True, check=True)
         session_home = Path(desktop_user.pw_dir)
-        session_home.mkdir(parents=True, exist_ok=True)
+        if not session_home.exists():
+            session_home.mkdir(parents=True, mode=0o700)
+            os.chown(session_home, desktop_uid, desktop_user.pw_gid)
         xsession = session_home / '.xsession'
         (session_home / '.successbox-desktop-session.json').unlink(missing_ok=True)
         xsession.write_text('exec dbus-run-session /usr/bin/python3 /opt/successbox-runtime/scripts/session.py session\n')
@@ -39,7 +43,9 @@ if mode in ('prepare', 'configure'):
         for p in (session_home / '.config', openbox, openbox / 'rc.xml'):
             os.chown(p, desktop_uid, desktop_user.pw_gid)
     codex = home / '.codex'
-    codex.mkdir(exist_ok=True)
+    if not codex.exists():
+        codex.mkdir(mode=0o700)
+        os.chown(codex, target_uid, options['gid'])
     (codex / 'ipc').mkdir(exist_ok=True)
     if mode == 'prepare':
         subprocess.run(['mount', '-t', 'tmpfs', '-o', 'mode=700', 'tmpfs', str(codex / 'ipc')], check=True)
@@ -47,7 +53,9 @@ if mode in ('prepare', 'configure'):
     # the app. User preferences and sessions remain in the same HOME view.
     replacements = {codex / 'config.toml': options['codexConfig'], codex / 'auth.json': json.dumps({'auth_mode': 'apikey', 'OPENAI_API_KEY': options['codexToken']})}
     claude = home / '.claude'
-    claude.mkdir(exist_ok=True)
+    if not claude.exists():
+        claude.mkdir(mode=0o700)
+        os.chown(claude, target_uid, options['gid'])
     settings_path = claude / 'settings.json'
     settings = json.loads(settings_path.read_text()) if settings_path.exists() else {}
     settings['env'] = {**settings.get('env', {}), 'ANTHROPIC_BASE_URL': options['url'], 'ANTHROPIC_API_KEY': options['claudeToken']}
@@ -153,5 +161,8 @@ else:
         os.setgid(options['gid'])
         os.setuid(options['uid'])
     argv = ['/usr/bin/chatgpt', '--remote-debugging-port=9333', '--remote-debugging-address=127.0.0.1']
-    if not options['uid']: argv += ['--no-sandbox']
+    # Chromium's renderer seccomp policy rejects sched_getaffinity inside
+    # the gVisor guest (SIGSYS on arm64). Keep namespace isolation for the
+    # ordinary-user launch; root launch also needs Chromium's root opt-out.
+    argv += ['--disable-seccomp-filter-sandbox'] if options['uid'] else ['--no-sandbox']
     os.execv(argv[0], argv)
