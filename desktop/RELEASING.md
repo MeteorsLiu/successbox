@@ -10,6 +10,8 @@ The release contains a macOS ZIP, two Linux deb packages, and one SHA-256 file p
 
 The macOS helper has an ad-hoc signature with the virtualization entitlement. A Developer ID certificate and Apple notarization are not configured, so this is not a notarized distribution: macOS may require approval in Privacy & Security before first launch. Do not describe ad-hoc signing as Gatekeeper approval.
 
+Codex Desktop runs inside gVisor. The macOS Linux guest launches it as root with Chromium's `--no-sandbox` option. The ordinary-user launch disables Chromium's inner seccomp filter after a reproducible renderer SIGSYS in gVisor, while retaining its namespace sandbox. These options apply to the guest Codex application; the host Electron sandbox remains enabled.
+
 ## Bundle contents
 
 | Resource                                                 | Purpose                                                                            |

@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
+import { cp } from 'node:fs/promises';
 import type { ForgeConfig } from '@electron-forge/shared-types';
 import { MakerZIP } from '@electron-forge/maker-zip';
 import { MakerDeb } from '@electron-forge/maker-deb';
@@ -26,10 +27,21 @@ const config: ForgeConfig = {
   packagerConfig: {
     asar: true,
     executableName: 'successbox',
-    extraResource: [
-      'assets',
-      '../api/gateway/v1/gateway.proto',
-      ...(bundled ? [runtimeDirectory] : []),
+    extraResource: ['assets', '../api/gateway/v1/gateway.proto'],
+    afterCopyExtraResources: [
+      async ({ buildPath, platform }) => {
+        if (!bundled) return;
+        // Packager's default fs.cp resolves symlinks into the build checkout.
+        // Keep xrdp/FreeRDP library links and the Claude launcher relocatable.
+        const resources =
+          platform === 'darwin'
+            ? path.join(buildPath, 'Successbox.app', 'Contents', 'Resources')
+            : path.join(buildPath, 'resources');
+        await cp(runtimeDirectory, path.join(resources, 'runtime'), {
+          recursive: true,
+          verbatimSymlinks: true,
+        });
+      },
     ],
   },
   rebuildConfig: {},
