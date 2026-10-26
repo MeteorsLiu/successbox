@@ -25,7 +25,7 @@ wrapper = work / 'runsc'
 wrapper.write_text('#!/bin/sh\nexec "' + str(runtime / 'linux/runsc') + '" --ignore-cgroups "$@"\n')
 wrapper.chmod(0o755)
 backend_log = (work / 'backend.log').open('w')
-backend = subprocess.Popen([str(runtime / 'linux/successbox-gvisor'), '--socket', str(socket), '--state', str(work / 'state'), '--runsc', str(wrapper), '--worktrees', str(runtime / 'linux/worktrees'), '--network', 'slirp4netns', '--slirp4netns', '/usr/bin/slirp4netns', '--exit-on-stdin-close'], stdin=subprocess.PIPE, stdout=backend_log, stderr=backend_log)
+backend = subprocess.Popen([str(runtime / 'linux/successbox-gvisor'), '--socket', str(socket), '--state', str(work / ('state-' + 'long-profile-' * 8)), '--runsc', str(wrapper), '--worktrees', str(runtime / 'linux/worktrees'), '--network', 'slirp4netns', '--slirp4netns', '/usr/bin/slirp4netns', '--exit-on-stdin-close'], stdin=subprocess.PIPE, stdout=backend_log, stderr=backend_log)
 client = [str(runtime / 'host/sbx'), '--socket', str(socket)]
 box = None
 children = []
