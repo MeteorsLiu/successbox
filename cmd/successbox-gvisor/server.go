@@ -147,7 +147,7 @@ func (s *server) Create(ctx context.Context, request *pb.CreateRequest) (*pb.San
 	}
 	if network != nil {
 		resolv := filepath.Join(dir, "resolv.conf")
-		if err := os.WriteFile(resolv, []byte("nameserver 10.0.2.3\n"), 0600); err != nil {
+		if err := os.WriteFile(resolv, []byte("nameserver 10.0.2.3\n"), 0644); err != nil {
 			return nil, status.Errorf(codes.Internal, "prepare sandbox DNS: %v", err)
 		}
 		spec.Mounts = append(spec.Mounts, specs.Mount{Source: resolv, Destination: "/etc/resolv.conf", Type: "bind", Options: []string{"rbind", "ro", "nosuid", "nodev"}})

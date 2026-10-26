@@ -27,7 +27,8 @@ if mode in ('prepare', 'configure'):
         session_home = Path(desktop_user.pw_dir)
         session_home.mkdir(parents=True, exist_ok=True)
         xsession = session_home / '.xsession'
-        xsession.write_text('exec dbus-run-session openbox-session\n')
+        (session_home / '.successbox-desktop-session.json').unlink(missing_ok=True)
+        xsession.write_text('exec dbus-run-session /usr/bin/python3 /opt/successbox-runtime/scripts/session.py session\n')
         xsession.chmod(0o700)
         os.chown(xsession, desktop_uid, desktop_user.pw_gid)
         openbox = session_home / '.config/openbox'
@@ -114,27 +115,23 @@ if mode in ('prepare', 'configure'):
         for command in ([sesman, '--nodaemon'], [xrdp, '--nodaemon']):
             subprocess.Popen(command, env=environment, stdout=log, stderr=log, start_new_session=True)
     print(json.dumps({'username': desktop_user.pw_name, 'certificate': Path('/etc/xrdp/cert.pem').read_text()}))
+elif mode == 'session':
+    # The session owns its display/DBus environment. Reading another UID's
+    # /proc/PID/environ requires ptrace rights, which the sandbox does not grant.
+    session = Path.home() / '.successbox-desktop-session.json'
+    temporary = session.with_suffix('.tmp')
+    temporary.write_text(json.dumps({key: os.environ[key] for key in ('DISPLAY', 'DBUS_SESSION_BUS_ADDRESS', 'XDG_RUNTIME_DIR') if key in os.environ}))
+    temporary.chmod(0o600)
+    temporary.replace(session)
+    os.execvp('openbox-session', ['openbox-session'])
 else:
     options = json.loads(Path('/run/successbox-desktop.json').read_text())
     deadline = time.monotonic() + 90
-    while True:
-        for proc in Path('/proc').glob('[0-9]*'):
-            try:
-                if (proc / 'comm').read_text().strip() != 'openbox':
-                    continue
-                values = dict(item.split(b'=', 1) for item in (proc / 'environ').read_bytes().split(b'\0') if b'=' in item)
-                if b'DISPLAY' not in values:
-                    continue
-                for key in (b'DISPLAY', b'DBUS_SESSION_BUS_ADDRESS', b'XDG_RUNTIME_DIR'):
-                    if key in values: os.environ[key.decode()] = values[key].decode()
-                break
-            except (FileNotFoundError, PermissionError, ProcessLookupError):
-                continue
-        else:
-            if time.monotonic() > deadline: raise RuntimeError('RDP graphical session did not start')
-            time.sleep(0.2)
-            continue
-        break
+    session = Path(options['sessionHome']) / '.successbox-desktop-session.json'
+    while not session.exists():
+        if time.monotonic() > deadline: raise RuntimeError('RDP graphical session did not start')
+        time.sleep(0.2)
+    os.environ.update(json.loads(session.read_text()))
     os.environ['HOME'] = options['home']
     os.environ['XAUTHORITY'] = options['sessionHome'] + '/.Xauthority'
     os.chdir(options['home'])

@@ -51,15 +51,15 @@ jobs:
           - runner: macos-26
             platform: darwin
             arch: arm64
-            targets: '@electron-forge/maker-zip'
+            targets: 'zip'
           - runner: ubuntu-24.04
             platform: linux
             arch: x64
-            targets: '@electron-forge/maker-deb'
+            targets: 'deb'
           - runner: ubuntu-24.04-arm
             platform: linux
             arch: arm64
-            targets: '@electron-forge/maker-deb'
+            targets: 'deb'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -116,6 +116,12 @@ jobs:
         env:
           SUCCESSBOX_RELEASE: '1'
         run: npm run make -- --platform=${{ matrix.platform }} --arch=${{ matrix.arch }} --targets=${{ matrix.targets }}
+      - name: Verify the installed Linux desktop runtime
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get install -y xvfb
+          sudo apt-get install -y ./desktop/out/make/deb/*/*.deb
+          sudo xvfb-run -a python3 testdata/desktop-package.py /usr/lib/successbox/resources/runtime
       - name: Collect distribution and checksums
         env:
           TARGET: ${{ matrix.platform }}-${{ matrix.arch }}

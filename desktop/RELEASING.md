@@ -30,7 +30,7 @@ Runtime resources come from source builds and declared upstream downloads. Packa
 python3 desktop/scripts/build-runtime.py desktop/.runtime/runtime /absolute/path/to/apple-guest
 cd desktop
 npm ci
-SUCCESSBOX_RELEASE=1 npm run make -- --targets=@electron-forge/maker-zip
+SUCCESSBOX_RELEASE=1 npm run make -- --targets=zip
 ```
 
 Developer frontend builds without a runtime bundle still use the explicit `SUCCESSBOX_GATEWAY_CONFIG` connection file. `SUCCESSBOX_RELEASE=1` refuses to package if the runtime manifest is absent.

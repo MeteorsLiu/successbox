@@ -49,6 +49,7 @@ const config: ForgeConfig = {
             'pkexec',
             'slirp4netns',
             'socat',
+            'xauth',
             'python3',
             'openssl',
             'git',
