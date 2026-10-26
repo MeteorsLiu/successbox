@@ -2,9 +2,20 @@
 
 Electron 45、React 19、TypeScript 和 Electron Forge。产品设计见 [#16](https://github.com/MeteorsLiu/successbox/issues/16)。
 
-开发前先读仓库 [AGENTS.md](../AGENTS.md) 及任务对应的 issue。默认连接真实的 `GatewaySession` 控制服务，支持 MCP 安装审批、敏感值弹窗、已保存密钥的列表和删除，以及断线重连。当前 Codex 入口用于 Codex Desktop，通过 Display/RDP 打开图形应用；Claude Code 继续使用终端。账号管理、全局保护开关、持久运行记录和改动展示尚未接入。局部网络和网关验证不代表完整用户环境、worktree 发布和桌面 E2E 已完成。
+开发前先读仓库 [AGENTS.md](../AGENTS.md) 及任务对应的 issue。发行包包含 gVisor、LLM/MCP 网关、RDP 客户端和 Agent。Codex 入口打开真实 Codex Desktop；Claude Code 使用终端。已有 GatewaySession 负责 MCP 安装审批、敏感值弹窗、密钥列表与删除。
 
-## 运行
+## 使用发行包
+
+1. 安装对应系统的 Release 产物。macOS 支持 Apple Silicon + macOS 26；Linux 支持 Ubuntu 24.04 amd64/arm64，使用 `sudo apt install ./successbox*.deb` 安装依赖。
+2. 打开 Successbox，在欢迎页导入本机 Codex/Claude 配置，或添加自己的 API 账号。导入不会修改宿主配置。真实上游凭据只保存在宿主私有运行目录，沙箱使用受限网关 token。
+3. 点击 Codex Desktop 或 Claude Code。应用自动启动宿主网关和沙箱服务，首次 macOS 启动需要解压随包提供的 Linux 环境；Linux 通过系统授权窗口启动后端。
+4. MCP 安装与敏感字段请求显示在宿主可信窗口。Codex Desktop 工具目录在网关安装完成后自动刷新。关闭桌面连接会关闭对应沙箱；退出 Successbox 会停止本应用启动的后台服务。
+
+macOS 使用 Apple Containerization 承载 Linux gVisor，并共享用户完整 HOME；Linux 在用户系统文件视图上运行 gVisor。文件修改仍走 tmpfs + 按需 worktree，不直接写回宿主。发行包不携带开发者的账号、会话、缓存或录屏。macOS 包使用临时签名，尚未配置 Developer ID 签名与公证，首次启动可能需要在系统安全设置中允许。
+
+账号支持 API key，以及当前本机登录凭据导入。导入已有订阅会话时不复制刷新 token，以免后台网关刷新令牌影响原应用登录；会话到期后可使用独立登录流程。每种 Agent 有自己的账号绑定，同种 Agent 的多个窗口共用当前绑定。MCP 的手动目录管理、改动页和运行历史恢复尚未接入，不显示模拟成功。
+
+## 开发模式与外部服务
 
 ```sh
 cd desktop
@@ -15,7 +26,7 @@ npm run lint
 npm run package
 ```
 
-先按 [网关运行说明](../gateways/README.md) 启动宿主上的 `sbx gateways`，启用 `--control-listen` 和三个独立的控制 token。桌面应用不会自行启动或停止这些服务。
+先按 [网关运行说明](../gateways/README.md) 启动宿主上的 `sbx gateways`，启用 `--control-listen` 和三个独立的控制 token。显式配置外部服务时，桌面应用不会自行启动或停止这些服务；发行包默认使用上文的内置运行时。
 
 在宿主上创建仅当前用户可读的连接文件，例如 `gateway.json`：
 
@@ -113,20 +124,11 @@ SUCCESSBOX_GATEWAY_CONFIG=/absolute/path/to/gateway.json npm start
 
 RDP 应在普通窗口内适配画面尺寸，不传强制外层全屏参数。guest 应用最大化与 RDP 分辨率/缩放是两个步骤，需要同时验证键鼠坐标和窗口缩放。
 
-当前客户端在 viewer 退出时调用 Close，这是前端编排，不是 Display RPC 的断线语义。Close 成功不代表前端已读取成果，当前改动页明确显示未接入。完整用户文件继承、macOS worktree 发布、真实桌面交互和 OBS 全程录像仍须完成验证。
+当前客户端在 viewer 退出时调用 Close，这是前端编排，不是 Display RPC 的断线语义。Close 成功不代表前端已读取成果，当前改动页明确显示未接入。
 
-## 一键打包
+## 打包与发布
 
-工作流合入 `main` 后，在仓库的 **Actions → Desktop App → Run workflow** 选择分支并运行。完成后，在该次运行的 **Artifacts** 中下载对应平台的产物：
-
-| 产物                               | 内容                                              |
-| ---------------------------------- | ------------------------------------------------- |
-| `successbox-darwin-arm64-<commit>` | macOS Apple Silicon 的 ZIP，内含 `Successbox.app` |
-| `successbox-linux-x64-<commit>`    | Linux x64 的 ZIP 和 deb 安装包                    |
-
-工作流复用现有 Electron Forge 配置，在各平台原生 runner 上执行 `npm ci`、类型检查、lint 和 `npm run make`。涉及桌面源码、网关协议或该工作流的 PR，以及合入 `main` 的相关提交，也会自动打包。产物名包含构建 commit，上传的是 Forge 生成的分发包，解压 Actions 产物后再打开其中的 ZIP 或 deb。
-
-当前产物是桌面配套应用，包含资源和 `gateway.proto`；沙箱后端、网关程序、kernel 和 rootfs 仍按各模块说明单独准备。工作流不使用签名证书、不做 Apple 公证，也不发布 GitHub Release；打包通过不代表完整 Agent 链路已经验收。
+参见 [RELEASING.md](RELEASING.md)。PR 和手动运行只上传 Actions 产物；推送 `v*` tag 才创建 GitHub Release。工作流在原生 macOS arm64、Linux amd64、Linux arm64 runner 构建，包含运行时资源、原生网关测试、前端检查及 Linux 安装后桌面启动检查。发布产物是 macOS ZIP、两份 Linux deb 和各自 SHA-256 校验文件。
 
 ## 数据与操作
 
