@@ -76,6 +76,8 @@ finally:
             p = work / name
             if p.exists(): print(name, p.read_text()[-6000:], flush=True)
         closed = subprocess.run(client + ['close', box], timeout=30)
+        runtime_log = work / ('state-' + 'long-profile-' * 8) / box / 'runtime.log'
+        if runtime_log.exists(): print('runtime.log', runtime_log.read_text()[-10000:], flush=True)
     for child in reversed(children):
         if child.poll() is None: child.terminate()
         child.wait(timeout=15)

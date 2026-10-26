@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import pwd
 import shutil
+import socket
 import subprocess
 import sys
 import time
@@ -111,9 +112,21 @@ if mode in ('prepare', 'configure'):
     if bundled.exists():
         environment['LD_LIBRARY_PATH'] = ':'.join(str(p) for p in (bundled / 'usr/lib').glob('**/xrdp'))
     Path('/run/successbox-desktop.json').write_text(json.dumps({**options, 'user': desktop_user.pw_name, 'sessionHome': str(session_home)}))
+    services = []
     with open('/tmp/successbox-rdp.log', 'ab') as log:
         for command in ([sesman, '--nodaemon'], [xrdp, '--nodaemon']):
-            subprocess.Popen(command, env=environment, stdout=log, stderr=log, start_new_session=True)
+            services.append(subprocess.Popen(command, env=environment, stdout=log, stderr=log, start_new_session=True))
+    deadline = time.monotonic() + 15
+    while True:
+        for process in services:
+            if process.poll() is not None:
+                raise RuntimeError('RDP service exited ' + str(process.returncode) + ': ' + Path('/tmp/successbox-rdp.log').read_text()[-4096:])
+        try:
+            with socket.create_connection(('127.0.0.1', 3389), timeout=0.2): pass
+            break
+        except OSError:
+            if time.monotonic() > deadline: raise RuntimeError('RDP listener did not start')
+            time.sleep(0.1)
     print(json.dumps({'username': desktop_user.pw_name, 'certificate': Path('/etc/xrdp/cert.pem').read_text()}))
 elif mode == 'session':
     # The session owns its display/DBus environment. Reading another UID's
